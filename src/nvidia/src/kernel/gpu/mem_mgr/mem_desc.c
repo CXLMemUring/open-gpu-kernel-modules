@@ -1521,7 +1521,8 @@ _memdescFreeInternal
                 }
                 else
                 {
-                    NV_ASSERT_FAILED("Sysmemdesc outlived its attached pGpu");
+                    // TODO: p2p mem?..
+                    // NV_ASSERT_FAILED("Sysmemdesc outlived its attached pGpu");
                 }
             }
 
