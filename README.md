@@ -1,7 +1,6 @@
 # NVIDIA driver 580.76.05 with P2P for 4090 and 5090
 
 This allows using P2P on 4090 and 5090 GPUs with the 580.76.05 driver version.  
-See https://github.com/tinygrad/open-gpu-kernel-modules (various branches) for more info.
 
 ## How it works
 This modifies the kernel driver to force enable BAR1 P2P mode on GPUs not intended to use it.  
@@ -12,6 +11,8 @@ Note that this is very dangerous if you run untrusted software or devices.
 
 Proper IOMMU support is possible but would require registering IOVA mappings.  
 That would be a lot more work and seems unneeded given the intended use.  
+
+See https://github.com/tinygrad/open-gpu-kernel-modules/tree/550.54.15-p2p for a more detailed explanation.
 
 ## How to use
 
