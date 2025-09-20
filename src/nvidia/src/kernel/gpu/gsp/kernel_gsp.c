@@ -4471,6 +4471,12 @@ _kgspFwContainerVerifyVersion
 
     NvU64 expectedVersionLength = portStringLength(NV_VERSION_STRING);
 
+    // BYPASS: Skip version check for RTX 5090 P2P testing
+    NV_PRINTF(LEVEL_WARNING, "BYPASS: Skipping GSP firmware version check\n");
+    NV_PRINTF(LEVEL_WARNING, "Expected: %s, Got: %.*s\n",
+              NV_VERSION_STRING, (int)(fwversionSize > 0 ? fwversionSize - 1 : 0), pFwversion);
+    return NV_OK;
+
     // Check that text in .fwversion section of ELF matches our NV_VERSION_STRING
     if ((fwversionSize != expectedVersionLength + 1) ||
         (portStringCompare(pFwversion, NV_VERSION_STRING, expectedVersionLength) != 0))

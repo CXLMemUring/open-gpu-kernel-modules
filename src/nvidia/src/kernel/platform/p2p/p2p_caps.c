@@ -50,6 +50,10 @@ ct_assert(NV2080_GET_P2P_CAPS_UUID_LEN == NV_GPU_UUID_LEN);
 static NvBool
 areGpusP2PCompatible(OBJGPU *pGpu0, OBJGPU *pGpu1)
 {
+    // BYPASS: Force P2P compatibility for RTX 5090
+    NV_PRINTF(LEVEL_WARNING, "BYPASS: Forcing P2P compatibility\n");
+    return NV_TRUE;
+
     // Mark GPUs of different arch or impl incapable of P2P over pcie
     if ((gpuGetChipArch(pGpu0) != gpuGetChipArch(pGpu1)) ||
         (gpuGetChipImpl(pGpu0) != gpuGetChipImpl(pGpu1)))
