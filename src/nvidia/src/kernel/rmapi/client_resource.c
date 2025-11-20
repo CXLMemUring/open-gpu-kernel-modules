@@ -594,6 +594,40 @@ CliGetSystemP2pCaps
             }
         }
     }
+    else if (connectivity == P2P_CONNECTIVITY_CXL)
+    {
+        if (p2pCaps != NULL)
+        {
+            *p2pCaps |= (p2pAtomicCapStatus == NV0000_P2P_CAPS_STATUS_OK) ?
+                REF_DEF(NV0000_CTRL_SYSTEM_GET_P2P_CAPS_ATOMICS_SUPPORTED, _TRUE) : 0;
+            *p2pCaps |= (p2pReadCapStatus == NV0000_P2P_CAPS_STATUS_OK) ?
+                REF_DEF(NV0000_CTRL_SYSTEM_GET_P2P_CAPS_READS_SUPPORTED, _TRUE) : 0;
+            *p2pCaps |= (p2pWriteCapStatus == NV0000_P2P_CAPS_STATUS_OK) ?
+                REF_DEF(NV0000_CTRL_SYSTEM_GET_P2P_CAPS_WRITES_SUPPORTED, _TRUE) : 0;
+            *p2pCaps |= REF_DEF(NV0000_CTRL_SYSTEM_GET_P2P_CAPS_CXL_SUPPORTED, _TRUE);
+        }
+
+        if (p2pCapsStatus != NULL)
+        {
+            if (p2pAtomicCapStatus == NV0000_P2P_CAPS_STATUS_OK)
+            {
+                p2pCapsStatus[NV0000_CTRL_P2P_CAPS_INDEX_ATOMICS] = NV0000_P2P_CAPS_STATUS_OK;
+            }
+            p2pCapsStatus[NV0000_CTRL_P2P_CAPS_INDEX_CXL] = NV0000_P2P_CAPS_STATUS_OK;
+        }
+        if (gpuCount == 1)
+        {
+            if (p2pCaps != NULL)
+            {
+                *p2pCaps |= REF_DEF(NV0000_CTRL_SYSTEM_GET_P2P_CAPS_LOOPBACK_SUPPORTED, _TRUE);
+            }
+
+            if (p2pCapsStatus != NULL)
+            {
+                p2pCapsStatus[NV0000_CTRL_P2P_CAPS_INDEX_LOOPBACK] = NV0000_P2P_CAPS_STATUS_OK;
+            }
+        }
+    }
 
     if (p2pCapsStatus != NULL)
     {

@@ -572,7 +572,9 @@ p2papiConstruct_IMPL
 
     portMemFreeStackOrHeap(pP2pCapsParams);
 
-    if (REF_VAL(NV0000_CTRL_SYSTEM_GET_P2P_CAPS_C2C_SUPPORTED, p2pCaps))
+    if (REF_VAL(NV0000_CTRL_SYSTEM_GET_P2P_CAPS_CXL_SUPPORTED, p2pCaps))
+        p2pConnectionType = P2P_CONNECTIVITY_CXL;
+    else if (REF_VAL(NV0000_CTRL_SYSTEM_GET_P2P_CAPS_C2C_SUPPORTED, p2pCaps))
         p2pConnectionType = P2P_CONNECTIVITY_C2C;
     // It's impossible to detect P2P_CONNECTIVITY_NVLINK_INDIRECT connectivity.
     // There is no difference between NVLINK and NVLINK_INDIRECT in P2PApi creation path,

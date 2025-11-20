@@ -1396,6 +1396,105 @@ typedef struct NV2080_CTRL_CMD_BUS_GET_C2C_INFO_PARAMS {
 #define NV2080_CTRL_BUS_GET_C2C_INFO_REMOTE_TYPE_CPU 1
 #define NV2080_CTRL_BUS_GET_C2C_INFO_REMOTE_TYPE_GPU 2
 
+/*
+ * NV2080_CTRL_CMD_BUS_GET_CXL_INFO
+ *
+ * This command returns the CXL (Compute Express Link) information for P2P DMA.
+ *
+ *   bIsLinkUp[OUT]
+ *       NV_TRUE if the CXL links are present and operational.
+ *   bMemoryExpander[OUT]
+ *       NV_TRUE if CXL is operating in memory expander mode (Type 2/3 device).
+ *   nrLinks[OUT]
+ *       Total number of CXL links that are active.
+ *   maxNrLinks[OUT]
+ *       Maximum number of CXL links supported.
+ *   linkMask[OUT]
+ *       Bitmask of the CXL links present and up.
+ *   perLinkBwMBps[OUT]
+ *       Theoretical per link bandwidth in MBps.
+ *   cxlVersion[OUT]
+ *       CXL specification version (1, 2, or 3).
+ *   remoteType[OUT]
+ *       Type of the device connected via CXL:
+ *       NV2080_CTRL_BUS_GET_CXL_INFO_REMOTE_TYPE_CPU - CPU-attached
+ *       NV2080_CTRL_BUS_GET_CXL_INFO_REMOTE_TYPE_MEMORY - Memory device
+ *       NV2080_CTRL_BUS_GET_CXL_INFO_REMOTE_TYPE_ACCELERATOR - Accelerator/GPU
+ *
+ * Possible status values returned are:
+ *   NV_OK
+ *   NV_ERR_NOT_SUPPORTED
+ *   NV_ERR_INVALID_STATE
+ */
+
+#define NV2080_CTRL_CMD_BUS_GET_CXL_INFO                            (0x2080182c) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_BUS_INTERFACE_ID << 8) | NV2080_CTRL_CMD_BUS_GET_CXL_INFO_PARAMS_MESSAGE_ID" */
+
+#define NV2080_CTRL_CMD_BUS_GET_CXL_INFO_PARAMS_MESSAGE_ID (0x2CU)
+
+typedef struct NV2080_CTRL_CMD_BUS_GET_CXL_INFO_PARAMS {
+    NvBool bIsLinkUp;
+    NvBool bMemoryExpander;
+    NvU32  nrLinks;
+    NvU32  maxNrLinks;
+    NvU32  linkMask;
+    NvU32  perLinkBwMBps;
+    NvU32  cxlVersion;
+    NvU32  remoteType;
+} NV2080_CTRL_CMD_BUS_GET_CXL_INFO_PARAMS;
+
+#define NV2080_CTRL_BUS_GET_CXL_INFO_REMOTE_TYPE_CPU         1
+#define NV2080_CTRL_BUS_GET_CXL_INFO_REMOTE_TYPE_MEMORY      2
+#define NV2080_CTRL_BUS_GET_CXL_INFO_REMOTE_TYPE_ACCELERATOR 3
+
+/*
+ * NV2080_CTRL_CMD_BUS_CXL_P2P_DMA_REQUEST
+ *
+ * This command initiates a P2P DMA transfer between GPU and CXL memory.
+ * The CPU must have already registered the CXL buffer using RmP2PRegisterCxlBuffer.
+ *
+ *   cxlBufferHandle[IN]
+ *       Handle to the registered CXL buffer (from RmP2PRegisterCxlBuffer).
+ *   gpuOffset[IN]
+ *       Offset into GPU memory (in bytes).
+ *   cxlOffset[IN]
+ *       Offset into CXL buffer (in bytes).
+ *   size[IN]
+ *       Size of the transfer in bytes.
+ *   flags[IN]
+ *       Transfer flags:
+ *       NV2080_CTRL_BUS_CXL_P2P_DMA_FLAGS_DIRECTION_GPU_TO_CXL - Copy from GPU to CXL
+ *       NV2080_CTRL_BUS_CXL_P2P_DMA_FLAGS_DIRECTION_CXL_TO_GPU - Copy from CXL to GPU
+ *       NV2080_CTRL_BUS_CXL_P2P_DMA_FLAGS_ASYNC - Asynchronous transfer
+ *   transferId[OUT]
+ *       Unique identifier for this transfer (for async operations).
+ *
+ * Possible status values returned are:
+ *   NV_OK
+ *   NV_ERR_INVALID_ARGUMENT
+ *   NV_ERR_NOT_SUPPORTED
+ *   NV_ERR_NO_MEMORY
+ *   NV_ERR_BUSY_RETRY
+ */
+
+#define NV2080_CTRL_CMD_BUS_CXL_P2P_DMA_REQUEST                     (0x2080182d) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_BUS_INTERFACE_ID << 8) | NV2080_CTRL_CMD_BUS_CXL_P2P_DMA_REQUEST_PARAMS_MESSAGE_ID" */
+
+#define NV2080_CTRL_CMD_BUS_CXL_P2P_DMA_REQUEST_PARAMS_MESSAGE_ID (0x2DU)
+
+typedef struct NV2080_CTRL_CMD_BUS_CXL_P2P_DMA_REQUEST_PARAMS {
+    NvU64 cxlBufferHandle;
+    NvU64 gpuOffset;
+    NvU64 cxlOffset;
+    NvU64 size;
+    NvU32 flags;
+    NvU32 transferId;
+} NV2080_CTRL_CMD_BUS_CXL_P2P_DMA_REQUEST_PARAMS;
+
+#define NV2080_CTRL_BUS_CXL_P2P_DMA_FLAGS_DIRECTION                     0:0
+#define NV2080_CTRL_BUS_CXL_P2P_DMA_FLAGS_DIRECTION_GPU_TO_CXL      (0x00000000U)
+#define NV2080_CTRL_BUS_CXL_P2P_DMA_FLAGS_DIRECTION_CXL_TO_GPU      (0x00000001U)
+#define NV2080_CTRL_BUS_CXL_P2P_DMA_FLAGS_ASYNC                         1:1
+#define NV2080_CTRL_BUS_CXL_P2P_DMA_FLAGS_ASYNC_FALSE               (0x00000000U)
+#define NV2080_CTRL_BUS_CXL_P2P_DMA_FLAGS_ASYNC_TRUE                (0x00000001U)
 
 
 /*

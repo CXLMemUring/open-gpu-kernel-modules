@@ -104,7 +104,8 @@ p2pGetCaps
     if (!((connectivity == P2P_CONNECTIVITY_PCIE_PROPRIETARY) ||
           (connectivity == P2P_CONNECTIVITY_PCIE_BAR1) ||
           (connectivity == P2P_CONNECTIVITY_NVLINK) ||
-          (connectivity == P2P_CONNECTIVITY_C2C)))
+          (connectivity == P2P_CONNECTIVITY_C2C) ||
+          (connectivity == P2P_CONNECTIVITY_CXL)))
     {
         return NV_ERR_NOT_SUPPORTED;
     }

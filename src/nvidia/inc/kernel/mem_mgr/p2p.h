@@ -34,4 +34,11 @@ NV_STATUS  RmP2PPutPages            (NvU64, NvU32, NvU64, void *);
 NV_STATUS  RmP2PGetGpuByAddress     (NvU64, NvU64, OBJGPU **);
 NV_STATUS  RmP2PPutPagesPersistent  (void *, void *, void *);
 
+/* CXL P2P DMA API */
+NV_STATUS  RmP2PRegisterCxlBuffer   (void *, NvU64, NvU64, NvU32, void **);
+NV_STATUS  RmP2PUnregisterCxlBuffer (void *);
+NV_STATUS  RmP2PGetCxlPages         (void *, NvU64, NvU64, NvU64 *, NvU32 *, NvU32 *);
+NV_STATUS  RmP2PPutCxlPages         (void *, NvU64, NvU64);
+NV_STATUS  RmP2PCxlDmaRequest       (OBJGPU *, void *, NvU64, NvU64, NvU64, NvU32);
+
 #endif
