@@ -821,6 +821,7 @@ SRCS += src/kernel/platform/nbsi/nbsi_getv.c
 SRCS += src/kernel/platform/nbsi/nbsi_init.c
 SRCS += src/kernel/platform/nbsi/nbsi_osrg.c
 SRCS += src/kernel/platform/p2p/p2p_caps.c
+SRCS += src/kernel/mem_mgr/p2p_cxl.c
 SRCS += src/kernel/platform/platform.c
 SRCS += src/kernel/platform/platform_request_handler.c
 SRCS += src/kernel/platform/platform_request_handler_ctrl.c

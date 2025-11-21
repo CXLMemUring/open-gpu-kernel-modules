@@ -42,6 +42,7 @@
 #include "ctrl/ctrl0080/ctrl0080host.h"
 #include "ctrl/ctrl2080/ctrl2080bus.h"
 #include "ctrl/ctrl208f/ctrl208fbus.h"
+#include "mem_mgr/p2p.h"
 
 static NvU32
 kbusControlGetCaps
@@ -734,5 +735,109 @@ subdeviceCtrlCmdBusSetC2CLpwrStateVote_VF
 )
 {
     return NV_ERR_NOT_SUPPORTED;
+}
+
+//
+// CXL P2P DMA Control Commands
+//
+
+NV_STATUS
+subdeviceCtrlCmdBusGetCxlInfo_IMPL
+(
+    Subdevice *pSubdevice,
+    NV2080_CTRL_CMD_BUS_GET_CXL_INFO_PARAMS *pParams
+)
+{
+    OBJGPU *pGpu = GPU_RES_GET_GPU(pSubdevice);
+
+    NV_ASSERT_OR_RETURN(pParams != NULL, NV_ERR_INVALID_ARGUMENT);
+
+    // Initialize output parameters
+    portMemSet(pParams, 0, sizeof(*pParams));
+
+    //
+    // TODO: Implement actual CXL link detection
+    // This would query the platform for CXL device presence and status
+    // For now, return default values indicating no CXL link
+    //
+
+    // Check if GPU has CXL capability (placeholder check)
+    // In a real implementation, this would query hardware registers
+    // or platform ACPI tables for CXL support
+
+    pParams->bIsLinkUp = NV_FALSE;
+    pParams->bMemoryExpander = NV_FALSE;
+    pParams->nrLinks = 0;
+    pParams->maxNrLinks = 4;  // Max supported by CXL spec
+    pParams->linkMask = 0;
+    pParams->perLinkBwMBps = 0;
+    pParams->cxlVersion = 2;  // CXL 2.0
+    pParams->remoteType = NV2080_CTRL_BUS_GET_CXL_INFO_REMOTE_TYPE_CPU;
+
+    NV_PRINTF(LEVEL_INFO, "CXL info queried: linkUp=%d, version=%d\n",
+              pParams->bIsLinkUp, pParams->cxlVersion);
+
+    return NV_OK;
+}
+
+NV_STATUS
+subdeviceCtrlCmdBusCxlP2PDmaRequest_IMPL
+(
+    Subdevice *pSubdevice,
+    NV2080_CTRL_CMD_BUS_CXL_P2P_DMA_REQUEST_PARAMS *pParams
+)
+{
+    OBJGPU    *pGpu = GPU_RES_GET_GPU(pSubdevice);
+    NV_STATUS  status = NV_OK;
+    void      *pBufferHandle;
+    NvU32      direction;
+
+    NV_ASSERT_OR_RETURN(pParams != NULL, NV_ERR_INVALID_ARGUMENT);
+
+    // Validate parameters
+    if (pParams->cxlBufferHandle == 0)
+    {
+        NV_PRINTF(LEVEL_ERROR, "Invalid CXL buffer handle\n");
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    if (pParams->size == 0)
+    {
+        NV_PRINTF(LEVEL_ERROR, "Invalid transfer size\n");
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    pBufferHandle = (void *)(NvUPtr)pParams->cxlBufferHandle;
+    direction = DRF_VAL(2080, _CTRL_BUS_CXL_P2P_DMA_FLAGS, _DIRECTION, pParams->flags);
+
+    NV_PRINTF(LEVEL_INFO, "CXL P2P DMA request: handle=0x%llx, gpuOff=0x%llx, "
+              "cxlOff=0x%llx, size=0x%llx, dir=%s\n",
+              pParams->cxlBufferHandle, pParams->gpuOffset, pParams->cxlOffset,
+              pParams->size, direction ? "CXL->GPU" : "GPU->CXL");
+
+    //
+    // Call the CXL DMA request function
+    // This initiates the actual P2P DMA transfer
+    //
+    status = RmP2PCxlDmaRequest(pGpu,
+                                pBufferHandle,
+                                pParams->gpuOffset,
+                                pParams->cxlOffset,
+                                pParams->size,
+                                pParams->flags);
+
+    if (status == NV_OK)
+    {
+        // Assign a transfer ID for async tracking
+        // In a real implementation, this would be managed by the DMA engine
+        pParams->transferId = 1;
+    }
+    else
+    {
+        NV_PRINTF(LEVEL_ERROR, "CXL P2P DMA request failed: status=0x%x\n", status);
+        pParams->transferId = 0;
+    }
+
+    return status;
 }
 
