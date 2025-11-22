@@ -63,6 +63,7 @@ NV_CONFTEST_FUNCTION_COMPILE_TESTS += iommu_is_dma_domain
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += for_each_sgtable_dma_page
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += folio_test_swapcache
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += page_pgmap
+NV_CONFTEST_FUNCTION_COMPILE_TESTS += iommu_dev_enable_feature
 
 NV_CONFTEST_TYPE_COMPILE_TESTS += vm_ops_fault_removed_vma_arg
 NV_CONFTEST_TYPE_COMPILE_TESTS += mmu_notifier_ops_invalidate_range

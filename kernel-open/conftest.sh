@@ -1477,6 +1477,22 @@ compile_test() {
             compile_check_conftest "$CODE" "NV_BUS_TYPE_HAS_IOMMU_OPS" "" "types"
         ;;
 
+        iommu_dev_enable_feature)
+            #
+            # Determine if iommu_dev_enable_feature() function is present.
+            #
+            # Removed by commit series that made SVA/IOPF enablement automatic
+            # through domain attach path in v6.16
+            #
+            CODE="
+            #include <linux/iommu.h>
+            void conftest_iommu_dev_enable_feature(void) {
+                (void)iommu_dev_enable_feature(NULL, 0);
+            }"
+
+            compile_check_conftest "$CODE" "NV_IOMMU_DEV_ENABLE_FEATURE_PRESENT" "" "functions"
+        ;;
+
         eventfd_signal_has_counter_arg)
             #
             # Determine if eventfd_signal() function has an additional 'counter' argument.
@@ -4014,13 +4030,15 @@ compile_test() {
             # Added by commit: 15fd552d186c
             # ("dma-buf: change DMA-buf locking convention v3") in v5.5 (2018-07-03)
             #
+            # Removed in v6.15 as all attachments became dynamic by default.
+            #
             echo "$CONFTEST_PREAMBLE
             #include <linux/dma-buf.h>
             bool conftest_dma_buf_attachment_is_dynamic(void) {
                 return dma_buf_attachment_is_dynamic(NULL);
             }" > conftest$$.c
 
-            $CC $CFLAGS -c conftest$$.c > /dev/null 2>&1
+            $CC $CFLAGS -Werror -c conftest$$.c > /dev/null 2>&1
             rm -f conftest$$.c
 
             if [ -f conftest$$.o ]; then
@@ -7602,9 +7620,10 @@ compile_test() {
             # pages") in v6.14
             #
             CODE="
+            #include <linux/mm.h>
             #include <linux/mmzone.h>
-            int conftest_page_pgmap(void) {
-                return page_pgmap(NULL);
+            void conftest_page_pgmap(void) {
+                (void)page_pgmap((struct page *)NULL);
             }"
 
             compile_check_conftest "$CODE" "NV_PAGE_PGMAP_PRESENT" "" "functions"

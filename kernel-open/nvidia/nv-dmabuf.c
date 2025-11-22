@@ -835,10 +835,15 @@ nv_dma_buf_map(
     //
     // On non-coherent platforms, and on coherent platforms requesting
     // PCIe mapping, importers must be able to handle peer MMIO resources
-    // not backed by struct page.
+    // not backed by struct page. Check peer2peer support.
     //
-#if defined(NV_DMA_BUF_HAS_DYNAMIC_ATTACHMENT) && \
-    defined(NV_DMA_BUF_ATTACHMENT_HAS_PEER2PEER)
+    // dma_buf_attachment_is_dynamic() was removed in Linux 6.15+.
+    // When NV_DMA_BUF_HAS_DYNAMIC_ATTACHMENT is defined, the function exists
+    // and we check both dynamic status and peer2peer support.
+    // Otherwise, all attachments are dynamic-capable so check peer2peer only.
+    //
+#if defined(NV_DMA_BUF_ATTACHMENT_HAS_PEER2PEER)
+#if defined(NV_DMA_BUF_HAS_DYNAMIC_ATTACHMENT)
     if (((!priv->nv->coherent) ||
          (priv->mapping_type == NV_DMABUF_EXPORT_MAPPING_TYPE_FORCE_PCIE)) &&
         dma_buf_attachment_is_dynamic(attachment) &&
@@ -848,6 +853,16 @@ nv_dma_buf_map(
                   "NVRM: failed to map dynamic attachment with no P2P support\n");
         return NULL;
     }
+#else
+    if (((!priv->nv->coherent) ||
+         (priv->mapping_type == NV_DMABUF_EXPORT_MAPPING_TYPE_FORCE_PCIE)) &&
+        !attachment->peer2peer)
+    {
+        nv_printf(NV_DBG_ERRORS,
+                  "NVRM: failed to map attachment with no P2P support\n");
+        return NULL;
+    }
+#endif
 #endif
 
     mutex_lock(&priv->lock);

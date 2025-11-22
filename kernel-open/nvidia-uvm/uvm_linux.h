@@ -427,7 +427,12 @@ static inline pgprot_t uvm_pgprot_decrypted(pgprot_t prot)
     #define UVM_FOR_EACH_SGTABLE_DMA_PAGE_PRESENT() 1
 #endif
 
-#ifndef NV_PAGE_PGMAP_PRESENT
+//
+// page_pgmap() was added to the kernel in v6.14 by commit 82ba975e4c43
+// ("mm: allow compound zone device pages"). Before that, page->pgmap
+// was accessed directly. In v6.14+, struct page no longer has pgmap member.
+//
+#if !defined(NV_PAGE_PGMAP_PRESENT) && LINUX_VERSION_CODE < KERNEL_VERSION(6, 14, 0)
 #define page_pgmap(page) (page)->pgmap
 #endif
 
