@@ -38,8 +38,18 @@
 
 /* Control command IDs */
 #define NV0000_CTRL_CMD_SYSTEM_GET_P2P_CAPS_V2    0x00000127
+#define NV0000_CTRL_CMD_GPU_GET_ATTACHED_IDS      0x00000201
+#define NV0000_CTRL_CMD_GPU_GET_PROBED_IDS        0x00000214
+#define NV0000_CTRL_CMD_GPU_ATTACH_IDS            0x00000215
 #define NV2080_CTRL_CMD_BUS_GET_CXL_INFO          0x20801833
 #define NV2080_CTRL_CMD_BUS_CXL_P2P_DMA_REQUEST   0x20801834
+#define NV2080_CTRL_CMD_BUS_REGISTER_CXL_BUFFER   0x20801835
+
+/* GPU defines */
+#define NV0000_CTRL_GPU_MAX_ATTACHED_GPUS         32
+#define NV0000_CTRL_GPU_MAX_PROBED_GPUS           32
+#define NV0000_CTRL_GPU_ATTACH_ALL_PROBED_IDS     0x0000ffff
+#define NV0000_CTRL_GPU_INVALID_ID                0xffffffff
 
 /* Class IDs */
 #define NV01_ROOT                       0x00000000
@@ -60,7 +70,7 @@ typedef struct {
     uint32_t hObject;
     uint32_t cmd;
     uint32_t flags;
-    void    *params;
+    uint64_t params;  /* Already 8-byte aligned due to prior 16 bytes */
     uint32_t paramsSize;
     uint32_t status;
 } NVOS54_PARAMETERS;
@@ -70,7 +80,8 @@ typedef struct {
     uint32_t hObjectParent;
     uint32_t hObjectNew;
     uint32_t hClass;
-    void    *pAllocParms;
+    uint64_t pAllocParms;
+    uint32_t paramsSize;
     uint32_t status;
 } NVOS21_PARAMETERS;
 
@@ -103,12 +114,56 @@ typedef struct {
     uint32_t transferId;
 } NV2080_CTRL_CMD_BUS_CXL_P2P_DMA_REQUEST_PARAMS;
 
+/* CXL register buffer structure */
+typedef struct {
+    uint64_t baseAddress;
+    uint64_t size;
+    uint32_t cxlVersion;
+    uint64_t bufferHandle;
+} NV2080_CTRL_CMD_BUS_REGISTER_CXL_BUFFER_PARAMS;
+
 /* CXL buffer handle */
 typedef struct {
     void    *cpuVirtAddr;
     uint64_t physAddr;
     size_t   size;
+    uint64_t kernelHandle;  /* Handle returned by kernel registration */
 } CxlBufferHandle;
+
+/* Device allocation parameters */
+typedef struct {
+    uint32_t deviceId;
+    uint32_t hClientShare;
+    uint32_t hTargetClient;
+    uint32_t hTargetDevice;
+    uint32_t flags;
+    uint64_t vaSpaceSize __attribute__((aligned(8)));
+    uint64_t vaStartInternal __attribute__((aligned(8)));
+    uint64_t vaLimitInternal __attribute__((aligned(8)));
+    uint32_t vaMode;
+} NV0080_ALLOC_PARAMETERS;
+
+/* Subdevice allocation parameters */
+typedef struct {
+    uint32_t subDeviceId;
+} NV2080_ALLOC_PARAMETERS;
+
+/* GPU attach parameters */
+typedef struct {
+    uint32_t gpuIds[NV0000_CTRL_GPU_MAX_PROBED_GPUS];
+    uint32_t failedId;
+} NV0000_CTRL_GPU_ATTACH_IDS_PARAMS;
+
+/* GPU get attached IDs parameters */
+typedef struct {
+    uint32_t gpuIds[NV0000_CTRL_GPU_MAX_ATTACHED_GPUS];
+} NV0000_CTRL_GPU_GET_ATTACHED_IDS_PARAMS;
+
+/* GPU get probed IDs parameters */
+typedef struct {
+    uint32_t gpuIds[NV0000_CTRL_GPU_MAX_PROBED_GPUS];
+    uint32_t excludedGpuIds[NV0000_CTRL_GPU_MAX_PROBED_GPUS];
+} NV0000_CTRL_GPU_GET_PROBED_IDS_PARAMS;
 
 /* RM client state */
 typedef struct {
@@ -132,7 +187,7 @@ static int rm_control(RmClient *client, uint32_t hObject, uint32_t cmd,
     ctrl.hObject = hObject;
     ctrl.cmd = cmd;
     ctrl.flags = 0;
-    ctrl.params = params;
+    ctrl.params = (uint64_t)(uintptr_t)params;
     ctrl.paramsSize = paramsSize;
     ctrl.status = 0;
 
@@ -154,18 +209,29 @@ static int rm_control(RmClient *client, uint32_t hObject, uint32_t cmd,
  * Allocate RM object
  */
 static int rm_alloc(RmClient *client, uint32_t hParent, uint32_t hObject,
-                    uint32_t hClass, void *allocParams)
+                    uint32_t hClass, void *allocParams, uint32_t paramsSize)
 {
     NVOS21_PARAMETERS alloc;
     int ret;
 
     memset(&alloc, 0, sizeof(alloc));
-    alloc.hRoot = client->hClient;
-    alloc.hObjectParent = hParent;
-    alloc.hObjectNew = hObject;
+    /* For root client allocation, hRoot should be the new handle we're allocating */
+    if (hClass == NV01_ROOT) {
+        alloc.hRoot = hObject;  /* Client handle we're allocating */
+        alloc.hObjectParent = hObject;  /* For root, parent is itself */
+        alloc.hObjectNew = hObject;  /* Object being allocated */
+    } else {
+        alloc.hRoot = client->hClient;
+        alloc.hObjectParent = hParent;
+        alloc.hObjectNew = hObject;
+    }
     alloc.hClass = hClass;
-    alloc.pAllocParms = allocParams;
+    alloc.pAllocParms = (uint64_t)(uintptr_t)allocParams;
+    alloc.paramsSize = paramsSize;
     alloc.status = 0;
+
+    printf("  rm_alloc: hRoot=0x%x hParent=0x%x hObject=0x%x hClass=0x%x paramsSize=%u\n",
+           alloc.hRoot, alloc.hObjectParent, alloc.hObjectNew, alloc.hClass, alloc.paramsSize);
 
     ret = ioctl(client->fd, NV_ESC_RM_ALLOC, &alloc);
     if (ret < 0) {
@@ -209,19 +275,73 @@ static int rm_free(RmClient *client, uint32_t hParent, uint32_t hObject)
 static int rm_init(RmClient *client)
 {
     int ret;
+    NV0080_ALLOC_PARAMETERS deviceParams;
+    NV2080_ALLOC_PARAMETERS subdevParams;
+    NV0000_CTRL_GPU_GET_PROBED_IDS_PARAMS probedParams;
+    NV0000_CTRL_GPU_ATTACH_IDS_PARAMS attachParams;
+    uint32_t gpuId = 0;
+    int foundGpu = 0;
 
     /* Allocate client (root object) */
-    client->hClient = 0x10000001;
-    ret = rm_alloc(client, 0, client->hClient, NV01_ROOT, NULL);
+    client->hClient = 0xcaf10001;  /* Use RM-style handle */
+    ret = rm_alloc(client, 0, client->hClient, NV01_ROOT, NULL, 0);
     if (ret != 0) {
         printf("  Failed to allocate RM client\n");
         return ret;
     }
     printf("  RM client allocated: 0x%x\n", client->hClient);
 
-    /* Allocate device */
-    client->hDevice = 0x10000002;
-    ret = rm_alloc(client, client->hClient, client->hDevice, NV01_DEVICE_0, NULL);
+    /* Get probed GPU IDs */
+    memset(&probedParams, 0, sizeof(probedParams));
+    ret = rm_control(client, client->hClient, NV0000_CTRL_CMD_GPU_GET_PROBED_IDS,
+                     &probedParams, sizeof(probedParams));
+    if (ret != 0) {
+        printf("  Failed to get probed GPU IDs\n");
+        rm_free(client, 0, client->hClient);
+        return ret;
+    }
+
+    /* Find first valid GPU ID */
+    printf("  Probed GPU IDs: ");
+    for (int i = 0; i < 4; i++) {
+        printf("0x%x ", probedParams.gpuIds[i]);
+    }
+    printf("...\n");
+
+    for (int i = 0; i < NV0000_CTRL_GPU_MAX_PROBED_GPUS; i++) {
+        if (probedParams.gpuIds[i] != NV0000_CTRL_GPU_INVALID_ID) {
+            gpuId = probedParams.gpuIds[i];
+            printf("  Found probed GPU ID: 0x%x (index %d)\n", gpuId, i);
+            foundGpu = 1;
+            break;
+        }
+    }
+
+    if (!foundGpu) {
+        printf("  No probed GPUs found\n");
+        rm_free(client, 0, client->hClient);
+        return -1;
+    }
+
+    /* Attach the GPU - use ATTACH_ALL_PROBED_IDS to ensure GPU groups are created */
+    memset(&attachParams, 0, sizeof(attachParams));
+    attachParams.gpuIds[0] = NV0000_CTRL_GPU_ATTACH_ALL_PROBED_IDS;
+    ret = rm_control(client, client->hClient, NV0000_CTRL_CMD_GPU_ATTACH_IDS,
+                     &attachParams, sizeof(attachParams));
+    if (ret != 0) {
+        printf("  Warning: Failed to attach GPUs (status=0x%x), continuing anyway\n", ret);
+        /* Continue - GPU might already be attached */
+    } else {
+        printf("  GPUs attached successfully\n");
+    }
+
+    /* Allocate device with proper parameters */
+    client->hDevice = 0xcaf10002;
+    memset(&deviceParams, 0, sizeof(deviceParams));
+    deviceParams.deviceId = 0;  /* Device instance 0 (first attached GPU) */
+    printf("  Device params size: %zu bytes, deviceId=%u\n", sizeof(deviceParams), deviceParams.deviceId);
+    ret = rm_alloc(client, client->hClient, client->hDevice, NV01_DEVICE_0,
+                   &deviceParams, sizeof(deviceParams));
     if (ret != 0) {
         printf("  Failed to allocate device\n");
         rm_free(client, 0, client->hClient);
@@ -229,9 +349,12 @@ static int rm_init(RmClient *client)
     }
     printf("  Device allocated: 0x%x\n", client->hDevice);
 
-    /* Allocate subdevice */
-    client->hSubDevice = 0x10000003;
-    ret = rm_alloc(client, client->hDevice, client->hSubDevice, NV20_SUBDEVICE_0, NULL);
+    /* Allocate subdevice with proper parameters */
+    client->hSubDevice = 0xcaf10003;
+    memset(&subdevParams, 0, sizeof(subdevParams));
+    subdevParams.subDeviceId = 0;  /* First subdevice */
+    ret = rm_alloc(client, client->hDevice, client->hSubDevice, NV20_SUBDEVICE_0,
+                   &subdevParams, sizeof(subdevParams));
     if (ret != 0) {
         printf("  Failed to allocate subdevice\n");
         rm_free(client, client->hClient, client->hDevice);
@@ -297,6 +420,7 @@ static CxlBufferHandle *allocate_cxl_buffer(size_t size)
 
     handle->size = size;
     handle->physAddr = (uint64_t)(uintptr_t)handle->cpuVirtAddr;
+    handle->kernelHandle = 0;
 
     return handle;
 }
@@ -366,6 +490,38 @@ static int query_cxl_info(RmClient *client, NV2080_CTRL_CMD_BUS_GET_CXL_INFO_PAR
 }
 
 /*
+ * Register CXL buffer with kernel
+ */
+static int register_cxl_buffer(RmClient *client, CxlBufferHandle *handle, uint32_t cxlVersion)
+{
+    NV2080_CTRL_CMD_BUS_REGISTER_CXL_BUFFER_PARAMS params;
+    int ret;
+
+    printf("  Calling NV2080_CTRL_CMD_BUS_REGISTER_CXL_BUFFER (0x%x)\n",
+           NV2080_CTRL_CMD_BUS_REGISTER_CXL_BUFFER);
+
+    memset(&params, 0, sizeof(params));
+    params.baseAddress = (uint64_t)(uintptr_t)handle->cpuVirtAddr;
+    params.size = handle->size;
+    params.cxlVersion = cxlVersion;
+    params.bufferHandle = 0;
+
+    printf("    baseAddress: 0x%lx\n", params.baseAddress);
+    printf("    size: %lu bytes\n", params.size);
+    printf("    cxlVersion: %u\n", params.cxlVersion);
+
+    ret = rm_control(client, client->hSubDevice, NV2080_CTRL_CMD_BUS_REGISTER_CXL_BUFFER,
+                     &params, sizeof(params));
+
+    if (ret == 0) {
+        handle->kernelHandle = params.bufferHandle;
+        printf("    bufferHandle: 0x%lx\n", handle->kernelHandle);
+    }
+
+    return ret;
+}
+
+/*
  * Initiate CXL P2P DMA transfer via RM control
  */
 static int cxl_p2p_dma_transfer(RmClient *client, CxlBufferHandle *handle,
@@ -379,7 +535,8 @@ static int cxl_p2p_dma_transfer(RmClient *client, CxlBufferHandle *handle,
            NV2080_CTRL_CMD_BUS_CXL_P2P_DMA_REQUEST);
 
     memset(&params, 0, sizeof(params));
-    params.cxlBufferHandle = (uint64_t)(uintptr_t)handle;
+    /* Use the kernel handle returned by register_cxl_buffer */
+    params.cxlBufferHandle = handle->kernelHandle;
     params.gpuOffset = gpuOffset;
     params.cxlOffset = cxlOffset;
     params.size = size;
@@ -418,6 +575,13 @@ int main(int argc, char *argv[])
 
     printf("=== CXL P2P DMA Test ===\n\n");
 
+    /* Print structure sizes for debugging */
+    printf("Structure sizes:\n");
+    printf("  NVOS21_PARAMETERS: %zu bytes\n", sizeof(NVOS21_PARAMETERS));
+    printf("  NVOS54_PARAMETERS: %zu bytes\n", sizeof(NVOS54_PARAMETERS));
+    printf("  NV0080_ALLOC_PARAMETERS: %zu bytes\n", sizeof(NV0080_ALLOC_PARAMETERS));
+    printf("  NV2080_ALLOC_PARAMETERS: %zu bytes\n\n", sizeof(NV2080_ALLOC_PARAMETERS));
+
     /* Parse command line */
     if (argc > 1) {
         testSize = atol(argv[1]);
@@ -437,7 +601,7 @@ int main(int argc, char *argv[])
         printf("  Make sure NVIDIA driver is loaded and you have permissions\n");
         return 1;
     }
-    printf("  OK: Device opened (fd=%d)\n\n", client.fd);
+    printf("  OK: Control device opened (fd=%d)\n\n", client.fd);
 
     /* Step 2: Initialize RM client */
     printf("Step 2: Initializing RM client\n");
@@ -476,8 +640,17 @@ int main(int argc, char *argv[])
     init_test_pattern(cxlBuffer->cpuVirtAddr, testSize, 0xAB);
     printf("  OK: Test pattern initialized\n\n");
 
-    /* Step 6: Test GPU -> CXL transfer */
-    printf("Step 6: Testing GPU -> CXL P2P DMA transfer\n");
+    /* Step 6: Register CXL buffer with kernel */
+    printf("Step 6: Registering CXL buffer with kernel\n");
+    if (register_cxl_buffer(&client, cxlBuffer, cxlInfo.cxlVersion) != 0) {
+        printf("  FAILED: Cannot register CXL buffer\n");
+        result = 1;
+        goto cleanup;
+    }
+    printf("  OK: Buffer registered with kernel\n\n");
+
+    /* Step 7: Test GPU -> CXL transfer */
+    printf("Step 7: Testing GPU -> CXL P2P DMA transfer\n");
     if (cxl_p2p_dma_transfer(&client, cxlBuffer, 0, 0, testSize, CXL_P2P_DMA_FLAG_GPU_TO_CXL) != 0) {
         printf("  Transfer returned error (expected if not fully implemented)\n");
     } else {
@@ -485,8 +658,8 @@ int main(int argc, char *argv[])
     }
     printf("\n");
 
-    /* Step 7: Test CXL -> GPU transfer */
-    printf("Step 7: Testing CXL -> GPU P2P DMA transfer\n");
+    /* Step 8: Test CXL -> GPU transfer */
+    printf("Step 8: Testing CXL -> GPU P2P DMA transfer\n");
     if (cxl_p2p_dma_transfer(&client, cxlBuffer, 0, 0, testSize, CXL_P2P_DMA_FLAG_CXL_TO_GPU) != 0) {
         printf("  Transfer returned error (expected if not fully implemented)\n");
     } else {
@@ -494,8 +667,8 @@ int main(int argc, char *argv[])
     }
     printf("\n");
 
-    /* Step 8: Verify data integrity */
-    printf("Step 8: Verifying data integrity\n");
+    /* Step 9: Verify data integrity */
+    printf("Step 9: Verifying data integrity\n");
     int errors = verify_test_pattern(cxlBuffer->cpuVirtAddr, testSize, 0xAB);
     if (errors > 0) {
         printf("  %d errors found in data\n", errors);

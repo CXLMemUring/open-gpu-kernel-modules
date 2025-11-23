@@ -326,6 +326,13 @@ const struct NVOC_EXPORTED_METHOD_DEF* nvocGetExportedMethodDefFromMethodInfo_IM
     exportLength = pExportInfo->numEntries;
     exportArray =  pExportInfo->pExportEntries;
 
+    // Debug: Log search for CXL methods
+    if (methodId == 0x20801833 || methodId == 0x20801834)
+    {
+        NV_PRINTF(LEVEL_ERROR, "CXL method search: methodId=0x%x, numEntries=%u, exportArray=%p\n",
+               methodId, exportLength, exportArray);
+    }
+
     if (exportArray != NULL && exportLength > 0)
     {
         // The export array is sorted by methodId, so we can binary search it
@@ -336,7 +343,14 @@ const struct NVOC_EXPORTED_METHOD_DEF* nvocGetExportedMethodDefFromMethodInfo_IM
             NvU32 mid  = (low + high) / 2;
 
             if (exportArray[mid].methodId == methodId)
+            {
+                if (methodId == 0x20801833 || methodId == 0x20801834)
+                {
+                    NV_PRINTF(LEVEL_ERROR, "CXL method FOUND at index %u, pFunc=%p\n",
+                           mid, exportArray[mid].pFunc);
+                }
                 return &exportArray[mid];
+            }
 
             if (high == mid || low == mid)
                 break;
@@ -345,6 +359,11 @@ const struct NVOC_EXPORTED_METHOD_DEF* nvocGetExportedMethodDefFromMethodInfo_IM
                 high = mid;
             else
                 low = mid;
+        }
+
+        if (methodId == 0x20801833 || methodId == 0x20801834)
+        {
+            NV_PRINTF(LEVEL_ERROR, "CXL method NOT FOUND after search\n");
         }
     }
 

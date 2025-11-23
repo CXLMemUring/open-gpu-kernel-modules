@@ -105,6 +105,8 @@ clientConstruct_IMPL
 
     pClient->bActive = NV_TRUE;
 
+    NV_PRINTF(LEVEL_ERROR, "clientConstruct: hClient=0x%x bActive=TRUE\n", pClient->hClient);
+
     status = clientSetRestrictedRange(pClient, 0, 0);
     if (status != NV_OK)
         return status;
@@ -389,7 +391,10 @@ clientGetResourceRef_IMPL
 
     pResourceRef = mapFind(&pClient->resourceMap, hResource);
     if (pResourceRef == NULL)
+    {
+        NV_PRINTF(LEVEL_ERROR, "clientGetResourceRef: hResource=0x%x NOT FOUND in client map\n", hResource);
         return NV_ERR_OBJECT_NOT_FOUND;
+    }
 
     if (ppResourceRef != NULL)
         *ppResourceRef = pResourceRef;

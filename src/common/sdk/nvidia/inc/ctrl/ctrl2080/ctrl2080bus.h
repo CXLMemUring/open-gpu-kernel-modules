@@ -1496,6 +1496,42 @@ typedef struct NV2080_CTRL_CMD_BUS_CXL_P2P_DMA_REQUEST_PARAMS {
 #define NV2080_CTRL_BUS_CXL_P2P_DMA_FLAGS_ASYNC_FALSE               (0x00000000U)
 #define NV2080_CTRL_BUS_CXL_P2P_DMA_FLAGS_ASYNC_TRUE                (0x00000001U)
 
+/*
+ * NV2080_CTRL_CMD_BUS_REGISTER_CXL_BUFFER
+ *
+ * This command registers a CXL buffer for P2P DMA operations.
+ * The CPU allocates and provides the CXL memory region details.
+ *
+ *   baseAddress [IN]
+ *     The base physical address of the CXL buffer
+ *
+ *   size [IN]
+ *     The size of the buffer in bytes
+ *
+ *   cxlVersion [IN]
+ *     The CXL specification version (1, 2, or 3)
+ *
+ *   bufferHandle [OUT]
+ *     Returns a handle to the registered buffer for use in DMA requests
+ *
+ * Possible status values returned are:
+ *   NV_OK
+ *   NV_ERR_INVALID_ARGUMENT
+ *   NV_ERR_NOT_SUPPORTED
+ *   NV_ERR_NO_MEMORY
+ */
+
+#define NV2080_CTRL_CMD_BUS_REGISTER_CXL_BUFFER                     (0x20801835) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_BUS_INTERFACE_ID << 8) | NV2080_CTRL_CMD_BUS_REGISTER_CXL_BUFFER_PARAMS_MESSAGE_ID" */
+
+#define NV2080_CTRL_CMD_BUS_REGISTER_CXL_BUFFER_PARAMS_MESSAGE_ID (0x35U)
+
+typedef struct NV2080_CTRL_CMD_BUS_REGISTER_CXL_BUFFER_PARAMS {
+    NvU64 baseAddress;
+    NvU64 size;
+    NvU32 cxlVersion;
+    NvU64 bufferHandle;
+} NV2080_CTRL_CMD_BUS_REGISTER_CXL_BUFFER_PARAMS;
+
 
 /*
  * NV2080_CTRL_CMD_BUS_SYSMEM_ACCESS

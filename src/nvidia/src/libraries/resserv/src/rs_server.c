@@ -788,6 +788,8 @@ serverAllocResource
 
                 if (!pClientEntry->pClient->bActive)
                 {
+                    NV_PRINTF(LEVEL_ERROR, "serverAllocResource: client 0x%x bActive=FALSE, pClient=%p\n",
+                              pParams->hClient, pClientEntry->pClient);
                     status = NV_ERR_INVALID_STATE;
                     goto done;
                 }

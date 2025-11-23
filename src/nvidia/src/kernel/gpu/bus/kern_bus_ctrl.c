@@ -750,6 +750,8 @@ subdeviceCtrlCmdBusGetCxlInfo_IMPL
 {
     OBJGPU *pGpu = GPU_RES_GET_GPU(pSubdevice);
 
+    NV_PRINTF(LEVEL_ERROR, "CXL INFO: Function called! pParams=%p\n", pParams);
+
     NV_ASSERT_OR_RETURN(pParams != NULL, NV_ERR_INVALID_ARGUMENT);
 
     // Initialize output parameters
@@ -778,6 +780,60 @@ subdeviceCtrlCmdBusGetCxlInfo_IMPL
               pParams->bIsLinkUp, pParams->cxlVersion);
 
     return NV_OK;
+}
+
+NV_STATUS
+subdeviceCtrlCmdBusRegisterCxlBuffer_IMPL
+(
+    Subdevice *pSubdevice,
+    NV2080_CTRL_CMD_BUS_REGISTER_CXL_BUFFER_PARAMS *pParams
+)
+{
+    OBJGPU    *pGpu = GPU_RES_GET_GPU(pSubdevice);
+    NV_STATUS  status = NV_OK;
+    void      *pBufferHandle = NULL;
+
+    NV_ASSERT_OR_RETURN(pParams != NULL, NV_ERR_INVALID_ARGUMENT);
+
+    NV_PRINTF(LEVEL_INFO, "CXL buffer register: baseAddr=0x%llx, size=0x%llx, version=%u\n",
+              pParams->baseAddress, pParams->size, pParams->cxlVersion);
+
+    // Validate parameters
+    if (pParams->baseAddress == 0)
+    {
+        NV_PRINTF(LEVEL_ERROR, "Invalid CXL buffer base address\n");
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    if (pParams->size == 0)
+    {
+        NV_PRINTF(LEVEL_ERROR, "Invalid CXL buffer size\n");
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    //
+    // Call the CXL register buffer function
+    // This creates a kernel-side handle for the buffer
+    //
+    status = RmP2PRegisterCxlBuffer(pGpu,      // Use pGpu as device handle for now
+                                    pParams->baseAddress,
+                                    pParams->size,
+                                    pParams->cxlVersion,
+                                    &pBufferHandle);
+
+    if (status == NV_OK)
+    {
+        // Return the kernel handle to userspace
+        pParams->bufferHandle = (NvU64)(NvUPtr)pBufferHandle;
+        NV_PRINTF(LEVEL_INFO, "CXL buffer registered: handle=0x%llx\n", pParams->bufferHandle);
+    }
+    else
+    {
+        NV_PRINTF(LEVEL_ERROR, "CXL buffer registration failed: status=0x%x\n", status);
+        pParams->bufferHandle = 0;
+    }
+
+    return status;
 }
 
 NV_STATUS

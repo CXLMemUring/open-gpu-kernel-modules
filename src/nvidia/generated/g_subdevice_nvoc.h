@@ -199,6 +199,7 @@ struct Subdevice {
     NV_STATUS (*__subdeviceCtrlCmdBusSetC2CLpwrStateVote__)(struct Subdevice * /*this*/, NV2080_CTRL_CMD_BUS_SET_C2C_LPWR_STATE_VOTE_PARAMS *);  // halified (2 hals) exported (id=0x20801832) body
     NV_STATUS (*__subdeviceCtrlCmdBusGetCxlInfo__)(struct Subdevice * /*this*/, NV2080_CTRL_CMD_BUS_GET_CXL_INFO_PARAMS *);  // exported (id=0x20801833)
     NV_STATUS (*__subdeviceCtrlCmdBusCxlP2PDmaRequest__)(struct Subdevice * /*this*/, NV2080_CTRL_CMD_BUS_CXL_P2P_DMA_REQUEST_PARAMS *);  // exported (id=0x20801834)
+    NV_STATUS (*__subdeviceCtrlCmdBusRegisterCxlBuffer__)(struct Subdevice * /*this*/, NV2080_CTRL_CMD_BUS_REGISTER_CXL_BUFFER_PARAMS *);  // exported (id=0x20801835)
     NV_STATUS (*__subdeviceCtrlCmdBusSysmemAccess__)(struct Subdevice * /*this*/, NV2080_CTRL_BUS_SYSMEM_ACCESS_PARAMS *);  // exported (id=0x2080182c)
     NV_STATUS (*__subdeviceCtrlCmdBusSetP2pMapping__)(struct Subdevice * /*this*/, NV2080_CTRL_BUS_SET_P2P_MAPPING_PARAMS *);  // halified (2 hals) exported (id=0x2080182e) body
     NV_STATUS (*__subdeviceCtrlCmdBusUnsetP2pMapping__)(struct Subdevice * /*this*/, NV2080_CTRL_BUS_UNSET_P2P_MAPPING_PARAMS *);  // halified (2 hals) exported (id=0x2080182f) body
@@ -990,6 +991,8 @@ NV_STATUS __nvoc_objCreate_Subdevice(Subdevice**, Dynamic*, NvU32, struct CALL_C
 #define subdeviceCtrlCmdBusGetCxlInfo(pSubdevice, pParams) subdeviceCtrlCmdBusGetCxlInfo_DISPATCH(pSubdevice, pParams)
 #define subdeviceCtrlCmdBusCxlP2PDmaRequest_FNPTR(pSubdevice) pSubdevice->__subdeviceCtrlCmdBusCxlP2PDmaRequest__
 #define subdeviceCtrlCmdBusCxlP2PDmaRequest(pSubdevice, pParams) subdeviceCtrlCmdBusCxlP2PDmaRequest_DISPATCH(pSubdevice, pParams)
+#define subdeviceCtrlCmdBusRegisterCxlBuffer_FNPTR(pSubdevice) pSubdevice->__subdeviceCtrlCmdBusRegisterCxlBuffer__
+#define subdeviceCtrlCmdBusRegisterCxlBuffer(pSubdevice, pParams) subdeviceCtrlCmdBusRegisterCxlBuffer_DISPATCH(pSubdevice, pParams)
 #define subdeviceCtrlCmdBusSysmemAccess_FNPTR(pSubdevice) pSubdevice->__subdeviceCtrlCmdBusSysmemAccess__
 #define subdeviceCtrlCmdBusSysmemAccess(pSubdevice, pParams) subdeviceCtrlCmdBusSysmemAccess_DISPATCH(pSubdevice, pParams)
 #define subdeviceCtrlCmdBusSetP2pMapping_FNPTR(pSubdevice) pSubdevice->__subdeviceCtrlCmdBusSetP2pMapping__
@@ -2442,6 +2445,10 @@ static inline NV_STATUS subdeviceCtrlCmdBusGetCxlInfo_DISPATCH(struct Subdevice 
 
 static inline NV_STATUS subdeviceCtrlCmdBusCxlP2PDmaRequest_DISPATCH(struct Subdevice *pSubdevice, NV2080_CTRL_CMD_BUS_CXL_P2P_DMA_REQUEST_PARAMS *pParams) {
     return pSubdevice->__subdeviceCtrlCmdBusCxlP2PDmaRequest__(pSubdevice, pParams);
+}
+
+static inline NV_STATUS subdeviceCtrlCmdBusRegisterCxlBuffer_DISPATCH(struct Subdevice *pSubdevice, NV2080_CTRL_CMD_BUS_REGISTER_CXL_BUFFER_PARAMS *pParams) {
+    return pSubdevice->__subdeviceCtrlCmdBusRegisterCxlBuffer__(pSubdevice, pParams);
 }
 
 static inline NV_STATUS subdeviceCtrlCmdBusSysmemAccess_DISPATCH(struct Subdevice *pSubdevice, NV2080_CTRL_BUS_SYSMEM_ACCESS_PARAMS *pParams) {
@@ -5027,6 +5034,8 @@ static inline NV_STATUS subdeviceCtrlCmdBusSetC2CLpwrStateVote_92bfc3(struct Sub
 NV_STATUS subdeviceCtrlCmdBusGetCxlInfo_IMPL(struct Subdevice *pSubdevice, NV2080_CTRL_CMD_BUS_GET_CXL_INFO_PARAMS *pParams);
 
 NV_STATUS subdeviceCtrlCmdBusCxlP2PDmaRequest_IMPL(struct Subdevice *pSubdevice, NV2080_CTRL_CMD_BUS_CXL_P2P_DMA_REQUEST_PARAMS *pParams);
+
+NV_STATUS subdeviceCtrlCmdBusRegisterCxlBuffer_IMPL(struct Subdevice *pSubdevice, NV2080_CTRL_CMD_BUS_REGISTER_CXL_BUFFER_PARAMS *pParams);
 
 NV_STATUS subdeviceCtrlCmdBusSysmemAccess_IMPL(struct Subdevice *pSubdevice, NV2080_CTRL_BUS_SYSMEM_ACCESS_PARAMS *pParams);
 

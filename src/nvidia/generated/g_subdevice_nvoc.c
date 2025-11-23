@@ -6816,6 +6816,21 @@ static const struct NVOC_EXPORTED_METHOD_DEF __nvoc_exported_method_def_Subdevic
 #endif
     },
     {               /*  [445] */
+#if NVOC_EXPORTED_METHOD_DISABLED_BY_FLAG(0x8u)
+        /*pFunc=*/      (void (*)(void)) NULL,
+#else
+        /*pFunc=*/      (void (*)(void)) subdeviceCtrlCmdBusRegisterCxlBuffer_IMPL,
+#endif // NVOC_EXPORTED_METHOD_DISABLED_BY_FLAG(0x8u)
+        /*flags=*/      0x8u,
+        /*accessRight=*/0x0u,
+        /*methodId=*/   0x20801835u,
+        /*paramSize=*/  sizeof(NV2080_CTRL_CMD_BUS_REGISTER_CXL_BUFFER_PARAMS),
+        /*pClassInfo=*/ &(__nvoc_class_def_Subdevice.classInfo),
+#if NV_PRINTF_STRINGS_ALLOWED
+        /*func=*/       "subdeviceCtrlCmdBusRegisterCxlBuffer"
+#endif
+    },
+    {               /*  [446] */
 #if NVOC_EXPORTED_METHOD_DISABLED_BY_FLAG(0x318u)
         /*pFunc=*/      (void (*)(void)) NULL,
 #else
@@ -10189,6 +10204,11 @@ static void __nvoc_init_funcTable_Subdevice_1(Subdevice *pThis, RmHalspecOwner *
     // subdeviceCtrlCmdBusCxlP2PDmaRequest -- exported (id=0x20801834)
 #if !NVOC_EXPORTED_METHOD_DISABLED_BY_FLAG(0x8u)
     pThis->__subdeviceCtrlCmdBusCxlP2PDmaRequest__ = &subdeviceCtrlCmdBusCxlP2PDmaRequest_IMPL;
+#endif
+
+    // subdeviceCtrlCmdBusRegisterCxlBuffer -- exported (id=0x20801835)
+#if !NVOC_EXPORTED_METHOD_DISABLED_BY_FLAG(0x8u)
+    pThis->__subdeviceCtrlCmdBusRegisterCxlBuffer__ = &subdeviceCtrlCmdBusRegisterCxlBuffer_IMPL;
 #endif
 
     // subdeviceCtrlCmdBusSetP2pMapping -- halified (2 hals) exported (id=0x2080182e) body
