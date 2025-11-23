@@ -10181,6 +10181,16 @@ static void __nvoc_init_funcTable_Subdevice_1(Subdevice *pThis, RmHalspecOwner *
     pThis->__subdeviceCtrlCmdBusSysmemAccess__ = &subdeviceCtrlCmdBusSysmemAccess_IMPL;
 #endif
 
+    // subdeviceCtrlCmdBusGetCxlInfo -- exported (id=0x20801833)
+#if !NVOC_EXPORTED_METHOD_DISABLED_BY_FLAG(0x8u)
+    pThis->__subdeviceCtrlCmdBusGetCxlInfo__ = &subdeviceCtrlCmdBusGetCxlInfo_IMPL;
+#endif
+
+    // subdeviceCtrlCmdBusCxlP2PDmaRequest -- exported (id=0x20801834)
+#if !NVOC_EXPORTED_METHOD_DISABLED_BY_FLAG(0x8u)
+    pThis->__subdeviceCtrlCmdBusCxlP2PDmaRequest__ = &subdeviceCtrlCmdBusCxlP2PDmaRequest_IMPL;
+#endif
+
     // subdeviceCtrlCmdBusSetP2pMapping -- halified (2 hals) exported (id=0x2080182e) body
     if (( ((rmVariantHal_HalVarIdx >> 5) == 0UL) && ((1UL << (rmVariantHal_HalVarIdx & 0x1f)) & 0x00000001UL) )) /* RmVariantHal: VF */ 
     {
