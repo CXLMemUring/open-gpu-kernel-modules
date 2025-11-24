@@ -749,35 +749,34 @@ subdeviceCtrlCmdBusGetCxlInfo_IMPL
 )
 {
     OBJGPU *pGpu = GPU_RES_GET_GPU(pSubdevice);
-
-    NV_PRINTF(LEVEL_ERROR, "CXL INFO: Function called! pParams=%p\n", pParams);
+    NvU32   numDevices = 0;
+    NvU32   numMemDevices = 0;
+    NvBool  bLinkUp = NV_FALSE;
+    NvU32   cxlVersion = 2;
 
     NV_ASSERT_OR_RETURN(pParams != NULL, NV_ERR_INVALID_ARGUMENT);
 
     // Initialize output parameters
     portMemSet(pParams, 0, sizeof(*pParams));
 
-    //
-    // TODO: Implement actual CXL link detection
-    // This would query the platform for CXL device presence and status
-    // For now, return default values indicating no CXL link
-    //
+    // Query CXL system information
+    RmP2PGetCxlSystemInfo(&numDevices, &numMemDevices, &bLinkUp, &cxlVersion);
 
-    // Check if GPU has CXL capability (placeholder check)
-    // In a real implementation, this would query hardware registers
-    // or platform ACPI tables for CXL support
-
-    pParams->bIsLinkUp = NV_FALSE;
-    pParams->bMemoryExpander = NV_FALSE;
-    pParams->nrLinks = 0;
+    // Set output parameters based on detected CXL devices
+    pParams->bIsLinkUp = bLinkUp;
+    pParams->bMemoryExpander = (numMemDevices > 0) ? NV_TRUE : NV_FALSE;
+    pParams->nrLinks = numMemDevices;
     pParams->maxNrLinks = 4;  // Max supported by CXL spec
-    pParams->linkMask = 0;
-    pParams->perLinkBwMBps = 0;
-    pParams->cxlVersion = 2;  // CXL 2.0
+    pParams->linkMask = (numMemDevices > 0) ? ((1 << numMemDevices) - 1) : 0;
+
+    // PCIe Gen5 x8 = 32 GT/s * 8 lanes * (128/130) encoding = ~31.5 GB/s per direction
+    // Per link for x8: ~3900 MB/s
+    pParams->perLinkBwMBps = (numMemDevices > 0) ? 3900 : 0;
+    pParams->cxlVersion = cxlVersion;
     pParams->remoteType = NV2080_CTRL_BUS_GET_CXL_INFO_REMOTE_TYPE_CPU;
 
-    NV_PRINTF(LEVEL_INFO, "CXL info queried: linkUp=%d, version=%d\n",
-              pParams->bIsLinkUp, pParams->cxlVersion);
+    NV_PRINTF(LEVEL_INFO, "CXL info: devices=%u, memDevices=%u, linkUp=%d, version=%u\n",
+              numDevices, numMemDevices, bLinkUp, cxlVersion);
 
     return NV_OK;
 }
@@ -831,6 +830,40 @@ subdeviceCtrlCmdBusRegisterCxlBuffer_IMPL
     {
         NV_PRINTF(LEVEL_ERROR, "CXL buffer registration failed: status=0x%x\n", status);
         pParams->bufferHandle = 0;
+    }
+
+    return status;
+}
+
+NV_STATUS
+subdeviceCtrlCmdBusUnregisterCxlBuffer_IMPL
+(
+    Subdevice *pSubdevice,
+    NV2080_CTRL_CMD_BUS_UNREGISTER_CXL_BUFFER_PARAMS *pParams
+)
+{
+    NV_STATUS  status = NV_OK;
+    void      *pBufferHandle;
+
+    NV_ASSERT_OR_RETURN(pParams != NULL, NV_ERR_INVALID_ARGUMENT);
+
+    // Validate buffer handle
+    if (pParams->bufferHandle == 0)
+    {
+        NV_PRINTF(LEVEL_ERROR, "Invalid CXL buffer handle\n");
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    pBufferHandle = (void *)(NvUPtr)pParams->bufferHandle;
+
+    NV_PRINTF(LEVEL_INFO, "CXL buffer unregister: handle=0x%llx\n", pParams->bufferHandle);
+
+    // Unregister the buffer
+    status = RmP2PUnregisterCxlBuffer(pBufferHandle);
+
+    if (status != NV_OK)
+    {
+        NV_PRINTF(LEVEL_ERROR, "CXL buffer unregistration failed: status=0x%x\n", status);
     }
 
     return status;

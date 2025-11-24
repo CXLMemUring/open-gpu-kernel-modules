@@ -1019,3 +1019,212 @@ void nvidia_p2p_put_rsync_registers(
 }
 
 NV_EXPORT_SYMBOL(nvidia_p2p_put_rsync_registers);
+
+/*
+ * CXL Buffer Page Pinning
+ *
+ * Pins user pages for CXL buffer DMA and returns physical addresses.
+ */
+
+typedef struct {
+    NvU64        userVirtAddr;
+    NvU64        size;
+    NvU32        pageCount;
+    NvU64       *physAddrs;
+    struct page **pages;
+} cxl_pinned_buffer_t;
+
+NV_STATUS NV_API_CALL nv_pin_cxl_buffer(
+    NvU64   userVirtAddr,
+    NvU64   size,
+    void  **ppHandle
+)
+{
+    cxl_pinned_buffer_t *pBuffer = NULL;
+    unsigned long startAddr;
+    NvU32 pageCount;
+    int ret;
+    NvU32 i;
+
+    if (size == 0 || ppHandle == NULL)
+        return NV_ERR_INVALID_ARGUMENT;
+
+    pBuffer = kzalloc(sizeof(*pBuffer), GFP_KERNEL);
+    if (pBuffer == NULL)
+        return NV_ERR_NO_MEMORY;
+
+    startAddr = userVirtAddr & PAGE_MASK;
+    pageCount = (((userVirtAddr + size - 1) >> PAGE_SHIFT) - (startAddr >> PAGE_SHIFT)) + 1;
+
+    pBuffer->pages = kzalloc(pageCount * sizeof(struct page *), GFP_KERNEL);
+    if (pBuffer->pages == NULL)
+    {
+        kfree(pBuffer);
+        return NV_ERR_NO_MEMORY;
+    }
+
+    pBuffer->physAddrs = kzalloc(pageCount * sizeof(NvU64), GFP_KERNEL);
+    if (pBuffer->physAddrs == NULL)
+    {
+        kfree(pBuffer->pages);
+        kfree(pBuffer);
+        return NV_ERR_NO_MEMORY;
+    }
+
+    // Pin the user pages
+    nv_mmap_read_lock(current->mm);
+    ret = NV_PIN_USER_PAGES(startAddr, pageCount, FOLL_WRITE, pBuffer->pages);
+    nv_mmap_read_unlock(current->mm);
+
+    if (ret != pageCount)
+    {
+        if (ret > 0)
+        {
+            for (i = 0; i < ret; i++)
+                NV_UNPIN_USER_PAGE(pBuffer->pages[i]);
+        }
+        kfree(pBuffer->physAddrs);
+        kfree(pBuffer->pages);
+        kfree(pBuffer);
+        return NV_ERR_OPERATING_SYSTEM;
+    }
+
+    // Get physical addresses for each page
+    for (i = 0; i < pageCount; i++)
+    {
+        pBuffer->physAddrs[i] = page_to_phys(pBuffer->pages[i]);
+    }
+
+    pBuffer->userVirtAddr = userVirtAddr;
+    pBuffer->size = size;
+    pBuffer->pageCount = pageCount;
+
+    *ppHandle = pBuffer;
+
+    nv_printf(NV_DBG_INFO, "NVRM: Pinned CXL buffer: addr=0x%llx, size=%llu, pages=%u\n",
+              userVirtAddr, size, pageCount);
+
+    return NV_OK;
+}
+
+NV_STATUS NV_API_CALL nv_unpin_cxl_buffer(void *pHandle)
+{
+    cxl_pinned_buffer_t *pBuffer = (cxl_pinned_buffer_t *)pHandle;
+    NvU32 i;
+
+    if (pBuffer == NULL)
+        return NV_ERR_INVALID_ARGUMENT;
+
+    // Unpin pages
+    for (i = 0; i < pBuffer->pageCount; i++)
+    {
+        if (pBuffer->pages[i])
+            NV_UNPIN_USER_PAGE(pBuffer->pages[i]);
+    }
+
+    kfree(pBuffer->physAddrs);
+    kfree(pBuffer->pages);
+    kfree(pBuffer);
+
+    return NV_OK;
+}
+
+NV_STATUS NV_API_CALL nv_get_cxl_buffer_pages(
+    void    *pHandle,
+    NvU64  **ppPhysAddrs,
+    NvU32   *pPageCount
+)
+{
+    cxl_pinned_buffer_t *pBuffer = (cxl_pinned_buffer_t *)pHandle;
+
+    if (pBuffer == NULL || ppPhysAddrs == NULL || pPageCount == NULL)
+        return NV_ERR_INVALID_ARGUMENT;
+
+    *ppPhysAddrs = pBuffer->physAddrs;
+    *pPageCount = pBuffer->pageCount;
+
+    return NV_OK;
+}
+
+/*
+ * CXL Device Enumeration
+ *
+ * Enumerates CXL devices in the system using the Linux PCI subsystem.
+ * CXL memory devices have PCI class 0x0502 (Memory Controller / CXL)
+ */
+
+// CXL System Info structure (must match definition in p2p_cxl.c)
+typedef struct {
+    NvU32   numDevices;
+    NvU32   numMemoryDevices;
+    NvBool  bLinkUp;
+    NvU32   cxlVersion;
+} cxl_system_info_t;
+
+// PCI class for CXL memory devices
+#define PCI_CLASS_MEMORY_CXL  0x0502
+
+NV_STATUS NV_API_CALL nv_enumerate_cxl_devices(void *pInfo)
+{
+    cxl_system_info_t *info = (cxl_system_info_t *)pInfo;
+    struct pci_dev *pdev = NULL;
+    NvU32 numDevices = 0;
+    NvU32 numMemDevices = 0;
+    NvBool bLinkUp = NV_FALSE;
+    NvU32 cxlVersion = 2;
+    u16 linkStatus;
+    int ret;
+
+    if (info == NULL)
+        return NV_ERR_INVALID_ARGUMENT;
+
+    // Enumerate all PCI devices looking for CXL memory devices
+    for_each_pci_dev(pdev)
+    {
+        // Check for CXL memory device class (0x0502xx)
+        if ((pdev->class >> 8) == PCI_CLASS_MEMORY_CXL)
+        {
+            numDevices++;
+            numMemDevices++;
+
+            // Check if PCIe link is up by reading link status
+            ret = pcie_capability_read_word(pdev, PCI_EXP_LNKSTA, &linkStatus);
+            if (ret == 0)
+            {
+                // For endpoints, link is up if speed > 0 and width > 0
+                u16 speed = linkStatus & PCI_EXP_LNKSTA_CLS;
+                u16 width = (linkStatus & PCI_EXP_LNKSTA_NLW) >> PCI_EXP_LNKSTA_NLW_SHIFT;
+
+                if (speed > 0 && width > 0)
+                {
+                    bLinkUp = NV_TRUE;
+                }
+
+                // Check link speed for CXL version estimation
+                // Gen5 (32 GT/s) typically means CXL 2.0+
+                if (speed >= 5)  // Gen5 or higher
+                    cxlVersion = 2;
+                else if (speed >= 4)  // Gen4
+                    cxlVersion = 1;
+            }
+
+            nv_printf(NV_DBG_INFO, "NVRM: Found CXL device %04x:%02x:%02x.%x (class %06x)\n",
+                      pci_domain_nr(pdev->bus), pdev->bus->number,
+                      PCI_SLOT(pdev->devfn), PCI_FUNC(pdev->devfn),
+                      pdev->class);
+        }
+    }
+
+    info->numDevices = numDevices;
+    info->numMemoryDevices = numMemDevices;
+    info->bLinkUp = bLinkUp;
+    info->cxlVersion = cxlVersion;
+
+    if (numDevices > 0)
+    {
+        nv_printf(NV_DBG_INFO, "NVRM: CXL enumeration: %u devices, %u memory devices, linkUp=%d, version=%u\n",
+                  numDevices, numMemDevices, bLinkUp, cxlVersion);
+    }
+
+    return NV_OK;
+}

@@ -1532,6 +1532,28 @@ typedef struct NV2080_CTRL_CMD_BUS_REGISTER_CXL_BUFFER_PARAMS {
     NvU64 bufferHandle;
 } NV2080_CTRL_CMD_BUS_REGISTER_CXL_BUFFER_PARAMS;
 
+/*
+ * NV2080_CTRL_CMD_BUS_UNREGISTER_CXL_BUFFER
+ *
+ * This command unregisters a previously registered CXL buffer.
+ *
+ *   bufferHandle [IN]
+ *     The handle returned from NV2080_CTRL_CMD_BUS_REGISTER_CXL_BUFFER
+ *
+ * Possible status values returned are:
+ *   NV_OK
+ *   NV_ERR_INVALID_ARGUMENT
+ *   NV_ERR_OBJECT_NOT_FOUND
+ */
+
+#define NV2080_CTRL_CMD_BUS_UNREGISTER_CXL_BUFFER                     (0x20801836)
+
+#define NV2080_CTRL_CMD_BUS_UNREGISTER_CXL_BUFFER_PARAMS_MESSAGE_ID (0x36U)
+
+typedef struct NV2080_CTRL_CMD_BUS_UNREGISTER_CXL_BUFFER_PARAMS {
+    NvU64 bufferHandle;
+} NV2080_CTRL_CMD_BUS_UNREGISTER_CXL_BUFFER_PARAMS;
+
 
 /*
  * NV2080_CTRL_CMD_BUS_SYSMEM_ACCESS

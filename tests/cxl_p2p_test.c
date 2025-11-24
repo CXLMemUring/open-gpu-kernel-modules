@@ -44,6 +44,7 @@
 #define NV2080_CTRL_CMD_BUS_GET_CXL_INFO          0x20801833
 #define NV2080_CTRL_CMD_BUS_CXL_P2P_DMA_REQUEST   0x20801834
 #define NV2080_CTRL_CMD_BUS_REGISTER_CXL_BUFFER   0x20801835
+#define NV2080_CTRL_CMD_BUS_UNREGISTER_CXL_BUFFER 0x20801836
 
 /* GPU defines */
 #define NV0000_CTRL_GPU_MAX_ATTACHED_GPUS         32
@@ -122,6 +123,11 @@ typedef struct {
     uint64_t bufferHandle;
 } NV2080_CTRL_CMD_BUS_REGISTER_CXL_BUFFER_PARAMS;
 
+/* CXL unregister buffer structure */
+typedef struct {
+    uint64_t bufferHandle;
+} NV2080_CTRL_CMD_BUS_UNREGISTER_CXL_BUFFER_PARAMS;
+
 /* CXL buffer handle */
 typedef struct {
     void    *cpuVirtAddr;
@@ -167,7 +173,8 @@ typedef struct {
 
 /* RM client state */
 typedef struct {
-    int      fd;
+    int      fd;          /* Control device fd (/dev/nvidiactl) */
+    int      gpu_fd;      /* GPU device fd (/dev/nvidia0) */
     uint32_t hClient;
     uint32_t hDevice;
     uint32_t hSubDevice;
@@ -335,6 +342,16 @@ static int rm_init(RmClient *client)
         printf("  GPUs attached successfully\n");
     }
 
+    /* Open GPU device file - required for device allocation permission check */
+    client->gpu_fd = open("/dev/nvidia0", O_RDWR);
+    if (client->gpu_fd < 0) {
+        printf("  Warning: Failed to open /dev/nvidia0: %s\n", strerror(errno));
+        printf("  Device allocation may fail without GPU device file access\n");
+        /* Continue anyway - might work on some systems */
+    } else {
+        printf("  GPU device file opened (fd=%d)\n", client->gpu_fd);
+    }
+
     /* Allocate device with proper parameters */
     client->hDevice = 0xcaf10002;
     memset(&deviceParams, 0, sizeof(deviceParams));
@@ -379,6 +396,10 @@ static void rm_cleanup(RmClient *client)
     }
     if (client->hClient) {
         rm_free(client, 0, client->hClient);
+    }
+    if (client->gpu_fd >= 0) {
+        close(client->gpu_fd);
+        client->gpu_fd = -1;
     }
 }
 
@@ -522,6 +543,37 @@ static int register_cxl_buffer(RmClient *client, CxlBufferHandle *handle, uint32
 }
 
 /*
+ * Unregister CXL buffer from RM
+ */
+static int unregister_cxl_buffer(RmClient *client, CxlBufferHandle *handle)
+{
+    NV2080_CTRL_CMD_BUS_UNREGISTER_CXL_BUFFER_PARAMS params;
+    int ret;
+
+    if (handle->kernelHandle == 0) {
+        return 0;  /* Nothing to unregister */
+    }
+
+    printf("  Calling NV2080_CTRL_CMD_BUS_UNREGISTER_CXL_BUFFER (0x%x)\n",
+           NV2080_CTRL_CMD_BUS_UNREGISTER_CXL_BUFFER);
+
+    memset(&params, 0, sizeof(params));
+    params.bufferHandle = handle->kernelHandle;
+
+    printf("    bufferHandle: 0x%lx\n", params.bufferHandle);
+
+    ret = rm_control(client, client->hSubDevice, NV2080_CTRL_CMD_BUS_UNREGISTER_CXL_BUFFER,
+                     &params, sizeof(params));
+
+    if (ret == 0) {
+        handle->kernelHandle = 0;
+        printf("  OK: Buffer unregistered\n");
+    }
+
+    return ret;
+}
+
+/*
  * Initiate CXL P2P DMA transfer via RM control
  */
 static int cxl_p2p_dma_transfer(RmClient *client, CxlBufferHandle *handle,
@@ -572,6 +624,7 @@ int main(int argc, char *argv[])
     size_t testSize = TEST_BUFFER_SIZE;
 
     memset(&client, 0, sizeof(client));
+    client.gpu_fd = -1;  /* Initialize to invalid fd */
 
     printf("=== CXL P2P DMA Test ===\n\n");
 
@@ -681,6 +734,10 @@ cleanup:
     printf("Cleanup:\n");
 
     if (cxlBuffer) {
+        /* Unregister before freeing */
+        if (cxlBuffer->kernelHandle != 0) {
+            unregister_cxl_buffer(&client, cxlBuffer);
+        }
         free_cxl_buffer(cxlBuffer);
         printf("  Buffer freed\n");
     }

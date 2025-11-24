@@ -40,5 +40,6 @@ NV_STATUS  RmP2PUnregisterCxlBuffer (void *);
 NV_STATUS  RmP2PGetCxlPages         (void *, NvU64, NvU64, NvU64 *, NvU32 *, NvU32 *);
 NV_STATUS  RmP2PPutCxlPages         (void *, NvU64, NvU64);
 NV_STATUS  RmP2PCxlDmaRequest       (OBJGPU *, void *, NvU64, NvU64, NvU64, NvU32);
+NV_STATUS  RmP2PGetCxlSystemInfo    (NvU32 *, NvU32 *, NvBool *, NvU32 *);
 
 #endif
