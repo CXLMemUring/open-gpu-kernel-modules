@@ -22,6 +22,7 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <errno.h>
+#include <time.h>
 
 /* NVIDIA RM ioctl definitions */
 #define NV_IOCTL_MAGIC      'F'
@@ -478,6 +479,9 @@ static int verify_test_pattern(void *buffer, size_t size, uint8_t seed)
 {
     uint8_t *p = (uint8_t *)buffer;
     int errors = 0;
+    size_t first_error = (size_t)-1;
+    size_t last_error = 0;
+    int zero_count = 0;
 
     for (size_t i = 0; i < size; i++) {
         uint8_t expected = (uint8_t)((i + seed) & 0xFF);
@@ -486,8 +490,20 @@ static int verify_test_pattern(void *buffer, size_t size, uint8_t seed)
                 printf("  Mismatch at offset %zu: expected 0x%02x, got 0x%02x\n",
                        i, expected, p[i]);
             }
+            if (first_error == (size_t)-1)
+                first_error = i;
+            last_error = i;
+            if (p[i] == 0)
+                zero_count++;
             errors++;
         }
+    }
+
+    if (errors > 0) {
+        printf("  Error range: offset %zu - %zu\n", first_error, last_error);
+        printf("  Bytes that are zero: %d / %d errors\n", zero_count, errors);
+        printf("  Error span: %zu bytes (%.2f pages)\n",
+               last_error - first_error + 1, (last_error - first_error + 1) / 4096.0);
     }
 
     return errors;
@@ -686,12 +702,26 @@ int main(int argc, char *argv[])
         result = 1;
         goto cleanup;
     }
-    printf("  OK: Buffer allocated at %p\n\n", cxlBuffer->cpuVirtAddr);
+    printf("  OK: Buffer allocated at %p\n", cxlBuffer->cpuVirtAddr);
+    printf("  DEBUG: CxlBufferHandle struct at %p (size=%zu)\n", (void *)cxlBuffer, sizeof(*cxlBuffer));
+    printf("  DEBUG: Data buffer range: %p - %p\n",
+           cxlBuffer->cpuVirtAddr, (char *)cxlBuffer->cpuVirtAddr + testSize);
+    printf("\n");
 
     /* Step 5: Initialize test data */
     printf("Step 5: Initializing test pattern\n");
     init_test_pattern(cxlBuffer->cpuVirtAddr, testSize, 0xAB);
-    printf("  OK: Test pattern initialized\n\n");
+    printf("  OK: Test pattern initialized\n");
+
+    /* Verify pattern before DMA */
+    printf("  Verifying pattern before DMA:\n");
+    int pre_errors = verify_test_pattern(cxlBuffer->cpuVirtAddr, testSize, 0xAB);
+    if (pre_errors > 0) {
+        printf("  WARNING: %d errors in pattern before DMA!\n", pre_errors);
+    } else {
+        printf("  Pattern correct before DMA\n");
+    }
+    printf("\n");
 
     /* Step 6: Register CXL buffer with kernel */
     printf("Step 6: Registering CXL buffer with kernel\n");
@@ -704,24 +734,82 @@ int main(int argc, char *argv[])
 
     /* Step 7: Test GPU -> CXL transfer */
     printf("Step 7: Testing GPU -> CXL P2P DMA transfer\n");
+    printf("  DEBUG before Step 7: cpuVirtAddr=%p, kernelHandle=0x%lx\n",
+           cxlBuffer->cpuVirtAddr, cxlBuffer->kernelHandle);
     if (cxl_p2p_dma_transfer(&client, cxlBuffer, 0, 0, testSize, CXL_P2P_DMA_FLAG_GPU_TO_CXL) != 0) {
         printf("  Transfer returned error (expected if not fully implemented)\n");
     } else {
         printf("  OK: Transfer completed\n");
     }
+    printf("  DEBUG after Step 7: cpuVirtAddr=%p, kernelHandle=0x%lx\n",
+           cxlBuffer->cpuVirtAddr, cxlBuffer->kernelHandle);
+
+    /* Check data after first transfer */
+    printf("  Checking data after GPU->CXL transfer:\n");
+    int after7_errors = verify_test_pattern(cxlBuffer->cpuVirtAddr, testSize, 0xAB);
+    if (after7_errors > 0) {
+        printf("  WARNING: %d errors after Step 7\n", after7_errors);
+    } else {
+        printf("  Data intact after Step 7\n");
+    }
     printf("\n");
 
     /* Step 8: Test CXL -> GPU transfer */
     printf("Step 8: Testing CXL -> GPU P2P DMA transfer\n");
+    printf("  DEBUG before Step 8: cpuVirtAddr=%p, kernelHandle=0x%lx\n",
+           cxlBuffer->cpuVirtAddr, cxlBuffer->kernelHandle);
     if (cxl_p2p_dma_transfer(&client, cxlBuffer, 0, 0, testSize, CXL_P2P_DMA_FLAG_CXL_TO_GPU) != 0) {
         printf("  Transfer returned error (expected if not fully implemented)\n");
     } else {
         printf("  OK: Transfer completed\n");
     }
+    printf("  DEBUG after Step 8: cpuVirtAddr=%p, kernelHandle=0x%lx\n",
+           cxlBuffer->cpuVirtAddr, cxlBuffer->kernelHandle);
+
+    /* Check data after second transfer */
+    printf("  Checking data after CXL->GPU transfer:\n");
+    int after8_errors = verify_test_pattern(cxlBuffer->cpuVirtAddr, testSize, 0xAB);
+    if (after8_errors > 0) {
+        printf("  WARNING: %d errors after Step 8\n", after8_errors);
+    } else {
+        printf("  Data intact after Step 8\n");
+    }
     printf("\n");
 
     /* Step 9: Verify data integrity */
     printf("Step 9: Verifying data integrity\n");
+    printf("  DEBUG before verify: cpuVirtAddr=%p\n", cxlBuffer->cpuVirtAddr);
+    if (cxlBuffer->cpuVirtAddr == NULL) {
+        printf("  ERROR: cpuVirtAddr is NULL! Memory corruption detected.\n");
+        result = 1;
+        goto cleanup;
+    }
+
+    /* Hex dump first 256 bytes to see actual content */
+    printf("  First 256 bytes of buffer:\n");
+    for (int row = 0; row < 16; row++) {
+        printf("    %04x: ", row * 16);
+        uint8_t *p = (uint8_t *)cxlBuffer->cpuVirtAddr + row * 16;
+        for (int col = 0; col < 16; col++) {
+            printf("%02x ", p[col]);
+        }
+        printf("\n");
+    }
+    printf("\n");
+
+    /* Check a few specific locations to find error pattern */
+    printf("  Scanning for first 20 errors to find pattern:\n");
+    int found = 0;
+    for (size_t i = 0; i < testSize && found < 20; i++) {
+        uint8_t *p = (uint8_t *)cxlBuffer->cpuVirtAddr;
+        uint8_t expected = (uint8_t)((i + 0xAB) & 0xFF);
+        if (p[i] != expected) {
+            printf("    Error at offset 0x%06zx (%zu): expected 0x%02x, got 0x%02x\n",
+                   i, i, expected, p[i]);
+            found++;
+        }
+    }
+
     int errors = verify_test_pattern(cxlBuffer->cpuVirtAddr, testSize, 0xAB);
     if (errors > 0) {
         printf("  %d errors found in data\n", errors);

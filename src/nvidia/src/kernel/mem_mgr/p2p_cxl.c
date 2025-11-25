@@ -437,7 +437,9 @@ RmP2PCxlDmaRequest
 
         NV_PRINTF(LEVEL_ERROR, "CXL P2P DMA: Calling memdescFillPages\n");
         memdescFillPages(pCxlMemDesc, 0, pPteArray, numPages, pHandle->pageSize);
-        // NOTE: Do NOT free pPteArray here - memdesc may reference it
+
+        // Set page size for GPU address translation
+        memdescSetPageSize(pCxlMemDesc, AT_GPU, pHandle->pageSize);
 
         NV_PRINTF(LEVEL_ERROR, "CXL P2P DMA: Pages set up, first page phys=0x%llx\n",
                   (unsigned long long)pHandle->pPageArray[startPage]);
