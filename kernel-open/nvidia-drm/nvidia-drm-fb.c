@@ -34,6 +34,10 @@
 
 #include <drm/drm_crtc_helper.h>
 
+#if defined(NV_DRM_DRM_MODESET_HELPER_H_PRESENT)
+#include <drm/drm_modeset_helper.h>
+#endif
+
 static void __nv_drm_framebuffer_free(struct nv_drm_framebuffer *nv_fb)
 {
     struct drm_framebuffer *fb = &nv_fb->base;
@@ -257,7 +261,11 @@ fail:
 struct drm_framebuffer *nv_drm_internal_framebuffer_create(
     struct drm_device *dev,
     struct drm_file *file,
-    struct drm_mode_fb_cmd2 *cmd)
+    struct drm_mode_fb_cmd2 *cmd
+#if defined(NV_DRM_HELPER_MODE_FILL_FB_STRUCT_HAS_FORMAT_INFO_ARG)
+    , const struct drm_format_info *info
+#endif
+    )
 {
     struct nv_drm_device *nv_dev = to_nv_device(dev);
     struct nv_drm_framebuffer *nv_fb;
@@ -310,6 +318,9 @@ struct drm_framebuffer *nv_drm_internal_framebuffer_create(
         dev,
         #endif
         &nv_fb->base,
+        #if defined(NV_DRM_HELPER_MODE_FILL_FB_STRUCT_HAS_FORMAT_INFO_ARG)
+        info,
+        #endif
         cmd);
 
     /*

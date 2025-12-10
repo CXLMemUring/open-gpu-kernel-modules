@@ -2496,16 +2496,25 @@ compile_test() {
         drm_helper_mode_fill_fb_struct | drm_helper_mode_fill_fb_struct_has_const_mode_cmd_arg)
             #
             # Determine if the drm_helper_mode_fill_fb_struct function takes
-            # 'dev' argument.
+            # 'dev' argument and/or 'format_info' argument.
             #
             # The drm_helper_mode_fill_fb_struct() has been updated to
             # take 'dev' parameter by commit a3f913ca9892 ("drm: Pass 'dev'
             # to drm_helper_mode_fill_fb_struct()") in v4.11 (2016-12-14)
             #
+            # The drm_helper_mode_fill_fb_struct() has been updated to
+            # take 'info' (drm_format_info) parameter in v6.18
+            #
+
+            # First check for the newest signature with format_info (v6.18+)
             echo "$CONFTEST_PREAMBLE
             #include <drm/drm_crtc_helper.h>
+            #if defined(NV_DRM_DRM_MODESET_HELPER_H_PRESENT)
+            #include <drm/drm_modeset_helper.h>
+            #endif
             void drm_helper_mode_fill_fb_struct(struct drm_device *dev,
                                                 struct drm_framebuffer *fb,
+                                                const struct drm_format_info *info,
                                                 const struct drm_mode_fb_cmd2 *mode_cmd)
             {
                 return;
@@ -2517,21 +2526,16 @@ compile_test() {
             if [ -f conftest$$.o ]; then
                 echo "#define NV_DRM_HELPER_MODE_FILL_FB_STRUCT_HAS_DEV_ARG" | append_conftest "function"
                 echo "#define NV_DRM_HELPER_MODE_FILL_FB_STRUCT_HAS_CONST_MODE_CMD_ARG" | append_conftest "function"
+                echo "#define NV_DRM_HELPER_MODE_FILL_FB_STRUCT_HAS_FORMAT_INFO_ARG" | append_conftest "function"
                 rm -f conftest$$.o
             else
-                echo "#undef NV_DRM_HELPER_MODE_FILL_FB_STRUCT_HAS_DEV_ARG" | append_conftest "function"
+                echo "#undef NV_DRM_HELPER_MODE_FILL_FB_STRUCT_HAS_FORMAT_INFO_ARG" | append_conftest "function"
 
-                #
-                # Determine if the drm_mode_fb_cmd2 pointer argument is const in
-                # drm_mode_config_funcs::fb_create and drm_helper_mode_fill_fb_struct().
-                #
-                # The drm_mode_fb_cmd2 pointer through this call chain was made
-                # const by commit 1eb83451ba55 ("drm: Pass the user drm_mode_fb_cmd2
-                # as const to .fb_create()") in v4.5 (2015-11-11)
-                #
+                # Check for signature with dev arg but no format_info (v4.11 - v6.17)
                 echo "$CONFTEST_PREAMBLE
                 #include <drm/drm_crtc_helper.h>
-                void drm_helper_mode_fill_fb_struct(struct drm_framebuffer *fb,
+                void drm_helper_mode_fill_fb_struct(struct drm_device *dev,
+                                                    struct drm_framebuffer *fb,
                                                     const struct drm_mode_fb_cmd2 *mode_cmd)
                 {
                     return;
@@ -2541,10 +2545,37 @@ compile_test() {
                 rm -f conftest$$.c
 
                 if [ -f conftest$$.o ]; then
+                    echo "#define NV_DRM_HELPER_MODE_FILL_FB_STRUCT_HAS_DEV_ARG" | append_conftest "function"
                     echo "#define NV_DRM_HELPER_MODE_FILL_FB_STRUCT_HAS_CONST_MODE_CMD_ARG" | append_conftest "function"
                     rm -f conftest$$.o
                 else
-                    echo "#undef NV_DRM_HELPER_MODE_FILL_FB_STRUCT_HAS_CONST_MODE_CMD_ARG" | append_conftest "function"
+                    echo "#undef NV_DRM_HELPER_MODE_FILL_FB_STRUCT_HAS_DEV_ARG" | append_conftest "function"
+
+                    #
+                    # Determine if the drm_mode_fb_cmd2 pointer argument is const in
+                    # drm_mode_config_funcs::fb_create and drm_helper_mode_fill_fb_struct().
+                    #
+                    # The drm_mode_fb_cmd2 pointer through this call chain was made
+                    # const by commit 1eb83451ba55 ("drm: Pass the user drm_mode_fb_cmd2
+                    # as const to .fb_create()") in v4.5 (2015-11-11)
+                    #
+                    echo "$CONFTEST_PREAMBLE
+                    #include <drm/drm_crtc_helper.h>
+                    void drm_helper_mode_fill_fb_struct(struct drm_framebuffer *fb,
+                                                        const struct drm_mode_fb_cmd2 *mode_cmd)
+                    {
+                        return;
+                    }" > conftest$$.c;
+
+                    $CC $CFLAGS -c conftest$$.c > /dev/null 2>&1
+                    rm -f conftest$$.c
+
+                    if [ -f conftest$$.o ]; then
+                        echo "#define NV_DRM_HELPER_MODE_FILL_FB_STRUCT_HAS_CONST_MODE_CMD_ARG" | append_conftest "function"
+                        rm -f conftest$$.o
+                    else
+                        echo "#undef NV_DRM_HELPER_MODE_FILL_FB_STRUCT_HAS_CONST_MODE_CMD_ARG" | append_conftest "function"
+                    fi
                 fi
             fi
         ;;
@@ -6815,6 +6846,25 @@ compile_test() {
             }"
 
             compile_check_conftest "$CODE" "NV_DRM_FBDEV_TTM_SETUP_PRESENT" "" "functions"
+        ;;
+
+        drm_fbdev_ttm_driver_fbdev_probe)
+            #
+            # Determine whether drm_fbdev_ttm_driver_fbdev_probe is present and exported.
+            #
+            # Added by commit 9060d7f49376 ("drm/fbdev-ttm: Implement fbdev probing")
+            # in v6.11. This symbol may not be exported on all kernel configurations.
+            #
+            CODE="
+            #include <drm/drm_fb_helper.h>
+            #if defined(NV_DRM_DRM_FBDEV_TTM_H_PRESENT)
+            #include <drm/drm_fbdev_ttm.h>
+            #endif
+            void conftest_drm_fbdev_ttm_driver_fbdev_probe(void) {
+                drm_fbdev_ttm_driver_fbdev_probe(NULL, NULL);
+            }"
+
+            compile_check_conftest "$CODE" "NV_DRM_FBDEV_TTM_DRIVER_FBDEV_PROBE_PRESENT" "" "functions"
         ;;
 
         drm_client_setup)

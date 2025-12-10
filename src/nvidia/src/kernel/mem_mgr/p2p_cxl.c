@@ -194,9 +194,6 @@ RmP2PRegisterCxlBuffer
 
     *ppBufferHandle = pHandle;
 
-    NV_PRINTF(LEVEL_INFO, "CXL buffer registered: addr=0x%llx, size=%llu, pages=%u\n",
-              baseAddress, (unsigned long long)size, pageCount);
-
     return NV_OK;
 }
 
@@ -237,8 +234,6 @@ RmP2PUnregisterCxlBuffer
     }
 
     portMemFree(pHandle);
-
-    NV_PRINTF(LEVEL_INFO, "CXL buffer unregistered\n");
 
     return NV_OK;
 }
@@ -372,9 +367,10 @@ RmP2PCxlDmaRequest
     MemoryManager *pMemoryManager = NULL;
     MEMORY_DESCRIPTOR *pCxlMemDesc = NULL;
     MEMORY_DESCRIPTOR *pGpuMemDesc = NULL;
-    NvBool bCxlToGpu = (flags & CXL_P2P_DMA_FLAG_CXL_TO_GPU) != 0;
     NvU32 i;
     RmPhysAddr *pPteArray = NULL;  // Keep alive until cleanup
+
+    (void)flags;  // Reserved for future use
 
     if (pGpu == NULL || pHandle == NULL || size == 0)
     {
@@ -398,16 +394,19 @@ RmP2PCxlDmaRequest
         return NV_ERR_INVALID_STATE;
     }
 
-    NV_PRINTF(LEVEL_ERROR, "CXL P2P DMA: Starting transfer, size=%llu, cxlOff=%llu\n",
-              (unsigned long long)size, (unsigned long long)cxlOffset);
-
     //
     // Create a memory descriptor for the CXL buffer
     // This describes the system memory pages that make up the CXL buffer
+    // PhysicallyContiguous must be NV_FALSE since CXL pages are not contiguous
     //
-    NV_PRINTF(LEVEL_ERROR, "CXL P2P DMA: Creating CXL memory descriptor\n");
-    status = memdescCreate(&pCxlMemDesc, pGpu, size, 0, NV_TRUE, ADDR_SYSMEM,
-                           NV_MEMORY_UNCACHED, MEMDESC_FLAGS_NONE);
+    // MEMDESC_FLAGS_SKIP_IOMMU_MAPPING: CXL memory doesn't need IOMMU mapping
+    //   since we're providing raw physical addresses that the GPU can DMA to directly.
+    // MEMDESC_FLAGS_CPU_ONLY: Prevents the driver from trying to set up GPU mappings
+    //   that could interfere with our direct physical address access.
+    //
+    status = memdescCreate(&pCxlMemDesc, pGpu, size, 0, NV_FALSE, ADDR_SYSMEM,
+                           NV_MEMORY_UNCACHED,
+                           MEMDESC_FLAGS_SKIP_IOMMU_MAPPING);
     if (status != NV_OK)
     {
         NV_PRINTF(LEVEL_ERROR, "Failed to create CXL memory descriptor: 0x%x\n", status);
@@ -419,8 +418,15 @@ RmP2PCxlDmaRequest
         NvU32 startPage = (NvU32)(cxlOffset / pHandle->pageSize);
         NvU32 numPages = (NvU32)((cxlOffset + size + pHandle->pageSize - 1) / pHandle->pageSize) - startPage;
 
-        NV_PRINTF(LEVEL_ERROR, "CXL P2P DMA: Setting up pages, startPage=%u, numPages=%u\n",
-                  startPage, numPages);
+        // Bounds check: ensure we don't read beyond the registered page array
+        if (startPage + numPages > pHandle->pageCount)
+        {
+            NV_PRINTF(LEVEL_ERROR, "CXL P2P: Page range exceeds registered buffer "
+                      "(start=%u, count=%u, max=%u)\n",
+                      startPage, numPages, pHandle->pageCount);
+            status = NV_ERR_INVALID_ARGUMENT;
+            goto cleanup;
+        }
 
         // Allocate PTE array - keep it alive until cleanup to avoid use-after-free
         pPteArray = portMemAllocNonPaged(numPages * sizeof(RmPhysAddr));
@@ -435,21 +441,16 @@ RmP2PCxlDmaRequest
             pPteArray[i] = pHandle->pPageArray[startPage + i];
         }
 
-        NV_PRINTF(LEVEL_ERROR, "CXL P2P DMA: Calling memdescFillPages\n");
         memdescFillPages(pCxlMemDesc, 0, pPteArray, numPages, pHandle->pageSize);
 
         // Set page size for GPU address translation
         memdescSetPageSize(pCxlMemDesc, AT_GPU, pHandle->pageSize);
-
-        NV_PRINTF(LEVEL_ERROR, "CXL P2P DMA: Pages set up, first page phys=0x%llx\n",
-                  (unsigned long long)pHandle->pPageArray[startPage]);
     }
 
     //
     // For this implementation, we allocate temporary GPU memory
     // In a real use case, the caller would provide GPU memory handles
     //
-    NV_PRINTF(LEVEL_ERROR, "CXL P2P DMA: Creating GPU memory descriptor\n");
     status = memdescCreate(&pGpuMemDesc, pGpu, size, 0, NV_TRUE, ADDR_FBMEM,
                            NV_MEMORY_UNCACHED, MEMDESC_FLAGS_NONE);
     if (status != NV_OK)
@@ -459,15 +460,12 @@ RmP2PCxlDmaRequest
     }
 
     // Allocate GPU memory
-    NV_PRINTF(LEVEL_ERROR, "CXL P2P DMA: Allocating GPU memory (%llu bytes)\n",
-              (unsigned long long)size);
     status = memdescAlloc(pGpuMemDesc);
     if (status != NV_OK)
     {
         NV_PRINTF(LEVEL_ERROR, "Failed to allocate GPU memory: 0x%x\n", status);
         goto cleanup;
     }
-    NV_PRINTF(LEVEL_ERROR, "CXL P2P DMA: GPU memory allocated successfully\n");
 
     //
     // Perform the transfer using the memory manager
@@ -487,7 +485,6 @@ RmP2PCxlDmaRequest
         dstSurf.pMemDesc = pGpuMemDesc;
         dstSurf.offset = 0;
 
-        NV_PRINTF(LEVEL_ERROR, "CXL P2P DMA: Starting CXL->GPU copy\n");
         status = memmgrMemCopy(pMemoryManager, &dstSurf, &srcSurf, size,
                                TRANSFER_FLAGS_PREFER_CE);
         if (status != NV_OK)
@@ -495,7 +492,6 @@ RmP2PCxlDmaRequest
             NV_PRINTF(LEVEL_ERROR, "CXL->GPU copy failed: 0x%x\n", status);
             goto cleanup;
         }
-        NV_PRINTF(LEVEL_ERROR, "CXL P2P DMA: CXL->GPU copy completed\n");
 
         // Step 2: Copy from GPU back to CXL (loopback to verify)
         srcSurf.pMemDesc = pGpuMemDesc;
@@ -503,7 +499,6 @@ RmP2PCxlDmaRequest
         dstSurf.pMemDesc = pCxlMemDesc;
         dstSurf.offset = 0;
 
-        NV_PRINTF(LEVEL_ERROR, "CXL P2P DMA: Starting GPU->CXL copy\n");
         status = memmgrMemCopy(pMemoryManager, &dstSurf, &srcSurf, size,
                                TRANSFER_FLAGS_PREFER_CE);
         if (status != NV_OK)
@@ -511,11 +506,7 @@ RmP2PCxlDmaRequest
             NV_PRINTF(LEVEL_ERROR, "GPU->CXL copy failed: 0x%x\n", status);
             goto cleanup;
         }
-        NV_PRINTF(LEVEL_ERROR, "CXL P2P DMA: GPU->CXL copy completed\n");
     }
-
-    NV_PRINTF(LEVEL_INFO, "CXL P2P DMA transfer completed: %s, size=%llu\n",
-              bCxlToGpu ? "CXL->GPU" : "GPU->CXL", (unsigned long long)size);
 
 cleanup:
     if (pGpuMemDesc != NULL)

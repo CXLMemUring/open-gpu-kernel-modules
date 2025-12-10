@@ -212,7 +212,10 @@ static void nv_drm_output_poll_changed(struct drm_device *dev)
 static struct drm_framebuffer *nv_drm_framebuffer_create(
     struct drm_device *dev,
     struct drm_file *file,
-    #if defined(NV_DRM_HELPER_MODE_FILL_FB_STRUCT_HAS_CONST_MODE_CMD_ARG)
+    #if defined(NV_DRM_HELPER_MODE_FILL_FB_STRUCT_HAS_FORMAT_INFO_ARG)
+    const struct drm_format_info *info,
+    const struct drm_mode_fb_cmd2 *cmd
+    #elif defined(NV_DRM_HELPER_MODE_FILL_FB_STRUCT_HAS_CONST_MODE_CMD_ARG)
     const struct drm_mode_fb_cmd2 *cmd
     #else
     struct drm_mode_fb_cmd2 *cmd
@@ -227,7 +230,11 @@ static struct drm_framebuffer *nv_drm_framebuffer_create(
     fb = nv_drm_internal_framebuffer_create(
             dev,
             file,
-            &local_cmd);
+            &local_cmd
+#if defined(NV_DRM_HELPER_MODE_FILL_FB_STRUCT_HAS_FORMAT_INFO_ARG)
+            , info
+#endif
+            );
 
     #if !defined(NV_DRM_HELPER_MODE_FILL_FB_STRUCT_HAS_CONST_MODE_CMD_ARG)
     *cmd = local_cmd;
@@ -2145,7 +2152,8 @@ static struct drm_driver nv_drm_driver = {
     .legacy_dev_list        = LIST_HEAD_INIT(nv_drm_driver.legacy_dev_list),
 #endif
 // XXX implement nvidia-drm's own .fbdev_probe callback that uses NVKMS kapi directly
-#if defined(NV_DRM_FBDEV_AVAILABLE) && defined(DRM_FBDEV_TTM_DRIVER_OPS)
+#if defined(NV_DRM_FBDEV_AVAILABLE) && defined(DRM_FBDEV_TTM_DRIVER_OPS) && \
+    defined(NV_DRM_FBDEV_TTM_DRIVER_FBDEV_PROBE_PRESENT)
     DRM_FBDEV_TTM_DRIVER_OPS,
 #endif
 };

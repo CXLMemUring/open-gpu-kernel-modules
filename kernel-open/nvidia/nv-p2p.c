@@ -1101,9 +1101,6 @@ NV_STATUS NV_API_CALL nv_pin_cxl_buffer(
 
     *ppHandle = pBuffer;
 
-    nv_printf(NV_DBG_INFO, "NVRM: Pinned CXL buffer: addr=0x%llx, size=%llu, pages=%u\n",
-              userVirtAddr, size, pageCount);
-
     return NV_OK;
 }
 
@@ -1208,10 +1205,6 @@ NV_STATUS NV_API_CALL nv_enumerate_cxl_devices(void *pInfo)
                     cxlVersion = 1;
             }
 
-            nv_printf(NV_DBG_INFO, "NVRM: Found CXL device %04x:%02x:%02x.%x (class %06x)\n",
-                      pci_domain_nr(pdev->bus), pdev->bus->number,
-                      PCI_SLOT(pdev->devfn), PCI_FUNC(pdev->devfn),
-                      pdev->class);
         }
     }
 
@@ -1219,12 +1212,6 @@ NV_STATUS NV_API_CALL nv_enumerate_cxl_devices(void *pInfo)
     info->numMemoryDevices = numMemDevices;
     info->bLinkUp = bLinkUp;
     info->cxlVersion = cxlVersion;
-
-    if (numDevices > 0)
-    {
-        nv_printf(NV_DBG_INFO, "NVRM: CXL enumeration: %u devices, %u memory devices, linkUp=%d, version=%u\n",
-                  numDevices, numMemDevices, bLinkUp, cxlVersion);
-    }
 
     return NV_OK;
 }

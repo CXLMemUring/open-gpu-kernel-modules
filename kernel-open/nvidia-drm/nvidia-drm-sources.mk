@@ -72,6 +72,7 @@ NV_CONFTEST_FUNCTION_COMPILE_TESTS += aperture_remove_conflicting_devices
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += aperture_remove_conflicting_pci_devices
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += drm_fbdev_generic_setup
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += drm_fbdev_ttm_setup
+NV_CONFTEST_FUNCTION_COMPILE_TESTS += drm_fbdev_ttm_driver_fbdev_probe
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += drm_client_setup
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += drm_connector_attach_hdr_output_metadata_property
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += drm_helper_crtc_enable_color_mgmt
