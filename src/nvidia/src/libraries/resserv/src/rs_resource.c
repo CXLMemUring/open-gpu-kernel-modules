@@ -127,12 +127,6 @@ NV_STATUS resControlLookup_IMPL
     *ppEntry = NULL;
     pEntry = objGetExportedMethodDef(staticCast(objFullyDerive(pResource), Dynamic), cmd);
 
-    // Debug for CXL commands
-    if (cmd == 0x20801833 || cmd == 0x20801834)
-    {
-        NV_PRINTF(LEVEL_ERROR, "resControlLookup: cmd=0x%x, pEntry=%p\n", cmd, pEntry);
-    }
-
     if (pEntry == NULL)
         return NV_ERR_NOT_SUPPORTED;
 

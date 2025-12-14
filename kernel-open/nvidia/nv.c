@@ -2256,10 +2256,6 @@ nvidia_close(
     int rc;
     nv_linux_file_private_t *nvlfp = NV_GET_LINUX_FILE_PRIVATE(file);
 
-    nv_printf(NV_DBG_INFO,
-              "NVRM: nvidia_close on GPU with minor number %d\n",
-              NV_DEVICE_MINOR_NUMBER(inode));
-
     if (nv_is_control_device(inode))
     {
         return nvidia_ctl_close(inode, file);
@@ -3092,8 +3088,6 @@ nvidia_ctl_open(
     nv_state_t *nv = NV_STATE_PTR(nvl);
     nv_linux_file_private_t *nvlfp = NV_GET_LINUX_FILE_PRIVATE(file);
 
-    nv_printf(NV_DBG_INFO, "NVRM: nvidia_ctl_open\n");
-
     down(&nvl->ldata_lock);
 
     /* save the nv away in file->private_data */
@@ -3125,8 +3119,6 @@ nvidia_ctl_close(
     nv_state_t *nv = NV_STATE_PTR(nvl);
     nv_linux_file_private_t *nvlfp = NV_GET_LINUX_FILE_PRIVATE(file);
     nvidia_stack_t *sp = nvlfp->sp;
-
-    nv_printf(NV_DBG_INFO, "NVRM: nvidia_ctl_close\n");
 
     down(&nvl->ldata_lock);
     if (NV_ATOMIC_DEC_AND_TEST(nvl->usage_count))
@@ -4172,8 +4164,6 @@ int NV_API_CALL nv_start_rc_timer(
 
     // set the timeout for 1 second in the future:
     mod_timer(&nvl->rc_timer.kernel_timer, jiffies + HZ);
-
-    nv_printf(NV_DBG_INFO, "NVRM: rc timer initialized\n");
 
     return 0;
 }

@@ -32,6 +32,8 @@
 
 #include "nvmisc.h"
 
+#include <linux/vmalloc.h>
+
 typedef enum nv_p2p_page_table_type {
     NV_P2P_PAGE_TABLE_TYPE_NON_PERSISTENT = 0,
     NV_P2P_PAGE_TABLE_TYPE_PERSISTENT,
@@ -1026,13 +1028,114 @@ NV_EXPORT_SYMBOL(nvidia_p2p_put_rsync_registers);
  * Pins user pages for CXL buffer DMA and returns physical addresses.
  */
 
+#include <linux/sched/signal.h>
+
+// Global tracking for CXL pinned buffers
+typedef struct {
+    spinlock_t      lock;
+    NvU64           totalPinnedBytes;      // Total bytes currently pinned
+    NvU64           totalPinnedPages;      // Total pages currently pinned
+    NvU32           numBuffers;            // Number of active buffers
+    NvU64           maxPinnedBytes;        // Maximum allowed pinned bytes (0 = no limit)
+    NvU32           maxBuffers;            // Maximum number of buffers (0 = no limit)
+    NvBool          bInitialized;
+} cxl_pinned_tracker_t;
+
+static cxl_pinned_tracker_t g_cxlPinnedTracker = {
+    .totalPinnedBytes = 0,
+    .totalPinnedPages = 0,
+    .numBuffers = 0,
+    .maxPinnedBytes = 0,           // Will be set based on system memory
+    .maxBuffers = 256,             // Default max buffers
+    .bInitialized = NV_FALSE
+};
+
+// Per-buffer structure
 typedef struct {
     NvU64        userVirtAddr;
     NvU64        size;
     NvU32        pageCount;
+    NvU32        pageSize;       // Track actual page size
     NvU64       *physAddrs;
     struct page **pages;
+    NvBool       bHugePages;     // Whether huge pages are used
+    NvU32        refCount;       // Reference count for buffer reuse
+    struct list_head listNode;   // For tracking in global list
 } cxl_pinned_buffer_t;
+
+// Initialize the global tracker (called on first use)
+static void cxl_init_tracker(void)
+{
+    struct sysinfo si;
+
+    if (g_cxlPinnedTracker.bInitialized)
+        return;
+
+    spin_lock_init(&g_cxlPinnedTracker.lock);
+
+    // Get system memory info to set reasonable limits
+    si_meminfo(&si);
+
+    // Default: allow pinning up to 90% of total system RAM for CXL workloads
+    g_cxlPinnedTracker.maxPinnedBytes = (NvU64)si.totalram * si.mem_unit * 9 / 10;
+    g_cxlPinnedTracker.bInitialized = NV_TRUE;
+}
+
+// Check if we can pin more memory (fast path)
+static inline NV_STATUS cxl_check_pin_limits(NvU64 size, NvU32 pageCount)
+{
+    unsigned long flags;
+
+    cxl_init_tracker();
+
+    spin_lock_irqsave(&g_cxlPinnedTracker.lock, flags);
+
+    // Check buffer count limit
+    if (g_cxlPinnedTracker.maxBuffers > 0 &&
+        g_cxlPinnedTracker.numBuffers >= g_cxlPinnedTracker.maxBuffers)
+    {
+        spin_unlock_irqrestore(&g_cxlPinnedTracker.lock, flags);
+        return NV_ERR_INSUFFICIENT_RESOURCES;
+    }
+
+    // Check total pinned bytes limit
+    if (g_cxlPinnedTracker.maxPinnedBytes > 0 &&
+        g_cxlPinnedTracker.totalPinnedBytes + size > g_cxlPinnedTracker.maxPinnedBytes)
+    {
+        spin_unlock_irqrestore(&g_cxlPinnedTracker.lock, flags);
+        return NV_ERR_INSUFFICIENT_RESOURCES;
+    }
+
+    spin_unlock_irqrestore(&g_cxlPinnedTracker.lock, flags);
+    return NV_OK;
+}
+
+// Update tracker after successful pin (inline for performance)
+static inline void cxl_track_pin(NvU64 size, NvU32 pageCount)
+{
+    unsigned long flags;
+
+    spin_lock_irqsave(&g_cxlPinnedTracker.lock, flags);
+    g_cxlPinnedTracker.totalPinnedBytes += size;
+    g_cxlPinnedTracker.totalPinnedPages += pageCount;
+    g_cxlPinnedTracker.numBuffers++;
+    spin_unlock_irqrestore(&g_cxlPinnedTracker.lock, flags);
+}
+
+// Update tracker after unpin (inline for performance)
+static inline void cxl_track_unpin(NvU64 size, NvU32 pageCount)
+{
+    unsigned long flags;
+
+    spin_lock_irqsave(&g_cxlPinnedTracker.lock, flags);
+    if (g_cxlPinnedTracker.totalPinnedBytes >= size)
+        g_cxlPinnedTracker.totalPinnedBytes -= size;
+    if (g_cxlPinnedTracker.totalPinnedPages >= pageCount)
+        g_cxlPinnedTracker.totalPinnedPages -= pageCount;
+    if (g_cxlPinnedTracker.numBuffers > 0)
+        g_cxlPinnedTracker.numBuffers--;
+    spin_unlock_irqrestore(&g_cxlPinnedTracker.lock, flags);
+}
 
 NV_STATUS NV_API_CALL nv_pin_cxl_buffer(
     NvU64   userVirtAddr,
@@ -1045,83 +1148,138 @@ NV_STATUS NV_API_CALL nv_pin_cxl_buffer(
     NvU32 pageCount;
     int ret;
     NvU32 i;
+    NV_STATUS status;
+    NvBool bLargeAlloc;
 
-    if (size == 0 || ppHandle == NULL)
+    if (unlikely(size == 0 || ppHandle == NULL))
         return NV_ERR_INVALID_ARGUMENT;
 
-    pBuffer = kzalloc(sizeof(*pBuffer), GFP_KERNEL);
-    if (pBuffer == NULL)
-        return NV_ERR_NO_MEMORY;
+    // Check for overflow
+    if (unlikely(userVirtAddr > ULONG_MAX - size))
+        return NV_ERR_INVALID_ARGUMENT;
 
     startAddr = userVirtAddr & PAGE_MASK;
-    pageCount = (((userVirtAddr + size - 1) >> PAGE_SHIFT) - (startAddr >> PAGE_SHIFT)) + 1;
+    pageCount = ((userVirtAddr + size - 1) >> PAGE_SHIFT) - (startAddr >> PAGE_SHIFT) + 1;
 
-    pBuffer->pages = kzalloc(pageCount * sizeof(struct page *), GFP_KERNEL);
-    if (pBuffer->pages == NULL)
-    {
-        kfree(pBuffer);
+    // Sanity check (max ~1TB)
+    if (unlikely(pageCount == 0 || pageCount > (1UL << 28)))
+        return NV_ERR_INVALID_ARGUMENT;
+
+    // Check limits before allocating
+    status = cxl_check_pin_limits(size, pageCount);
+    if (unlikely(status != NV_OK))
+        return status;
+
+    pBuffer = kzalloc(sizeof(*pBuffer), GFP_KERNEL);
+    if (unlikely(pBuffer == NULL))
         return NV_ERR_NO_MEMORY;
+
+    // Use vmalloc for large arrays (>512 entries)
+    bLargeAlloc = (pageCount > 512);
+
+    if (bLargeAlloc)
+    {
+        pBuffer->pages = vmalloc(pageCount * sizeof(struct page *));
+        pBuffer->physAddrs = vmalloc(pageCount * sizeof(NvU64));
+    }
+    else
+    {
+        pBuffer->pages = kmalloc(pageCount * sizeof(struct page *), GFP_KERNEL);
+        pBuffer->physAddrs = kmalloc(pageCount * sizeof(NvU64), GFP_KERNEL);
     }
 
-    pBuffer->physAddrs = kzalloc(pageCount * sizeof(NvU64), GFP_KERNEL);
-    if (pBuffer->physAddrs == NULL)
-    {
-        kfree(pBuffer->pages);
-        kfree(pBuffer);
-        return NV_ERR_NO_MEMORY;
-    }
+    if (unlikely(pBuffer->pages == NULL || pBuffer->physAddrs == NULL))
+        goto fail_alloc;
 
-    // Pin the user pages
+    // Pin user pages
     nv_mmap_read_lock(current->mm);
     ret = NV_PIN_USER_PAGES(startAddr, pageCount, FOLL_WRITE, pBuffer->pages);
     nv_mmap_read_unlock(current->mm);
 
-    if (ret != pageCount)
+    if (unlikely(ret != pageCount))
     {
         if (ret > 0)
         {
             for (i = 0; i < ret; i++)
                 NV_UNPIN_USER_PAGE(pBuffer->pages[i]);
         }
-        kfree(pBuffer->physAddrs);
-        kfree(pBuffer->pages);
-        kfree(pBuffer);
-        return NV_ERR_OPERATING_SYSTEM;
+        goto fail_alloc;
     }
 
-    // Get physical addresses for each page
+    // Convert to physical addresses (optimized loop)
     for (i = 0; i < pageCount; i++)
-    {
         pBuffer->physAddrs[i] = page_to_phys(pBuffer->pages[i]);
-    }
 
     pBuffer->userVirtAddr = userVirtAddr;
     pBuffer->size = size;
     pBuffer->pageCount = pageCount;
+    pBuffer->pageSize = PAGE_SIZE;
+    pBuffer->refCount = 1;
+    pBuffer->bHugePages = NV_FALSE;
 
+    cxl_track_pin(size, pageCount);
     *ppHandle = pBuffer;
-
     return NV_OK;
+
+fail_alloc:
+    if (pBuffer->physAddrs)
+    {
+        if (bLargeAlloc)
+            vfree(pBuffer->physAddrs);
+        else
+            kfree(pBuffer->physAddrs);
+    }
+    if (pBuffer->pages)
+    {
+        if (bLargeAlloc)
+            vfree(pBuffer->pages);
+        else
+            kfree(pBuffer->pages);
+    }
+    kfree(pBuffer);
+    return NV_ERR_NO_MEMORY;
 }
 
 NV_STATUS NV_API_CALL nv_unpin_cxl_buffer(void *pHandle)
 {
     cxl_pinned_buffer_t *pBuffer = (cxl_pinned_buffer_t *)pHandle;
     NvU32 i;
+    NvU64 savedSize;
+    NvU32 savedPageCount;
+    NvBool bLargeAlloc;
 
-    if (pBuffer == NULL)
+    if (unlikely(pBuffer == NULL))
         return NV_ERR_INVALID_ARGUMENT;
 
+    savedSize = pBuffer->size;
+    savedPageCount = pBuffer->pageCount;
+    bLargeAlloc = (savedPageCount > 512);
+
     // Unpin pages
-    for (i = 0; i < pBuffer->pageCount; i++)
+    if (pBuffer->pages)
     {
-        if (pBuffer->pages[i])
-            NV_UNPIN_USER_PAGE(pBuffer->pages[i]);
+        for (i = 0; i < savedPageCount; i++)
+        {
+            if (pBuffer->pages[i])
+                NV_UNPIN_USER_PAGE(pBuffer->pages[i]);
+        }
+
+        if (bLargeAlloc)
+            vfree(pBuffer->pages);
+        else
+            kfree(pBuffer->pages);
     }
 
-    kfree(pBuffer->physAddrs);
-    kfree(pBuffer->pages);
+    if (pBuffer->physAddrs)
+    {
+        if (bLargeAlloc)
+            vfree(pBuffer->physAddrs);
+        else
+            kfree(pBuffer->physAddrs);
+    }
+
     kfree(pBuffer);
+    cxl_track_unpin(savedSize, savedPageCount);
 
     return NV_OK;
 }
@@ -1134,8 +1292,11 @@ NV_STATUS NV_API_CALL nv_get_cxl_buffer_pages(
 {
     cxl_pinned_buffer_t *pBuffer = (cxl_pinned_buffer_t *)pHandle;
 
-    if (pBuffer == NULL || ppPhysAddrs == NULL || pPageCount == NULL)
+    if (unlikely(pBuffer == NULL || ppPhysAddrs == NULL || pPageCount == NULL))
         return NV_ERR_INVALID_ARGUMENT;
+
+    if (unlikely(pBuffer->physAddrs == NULL || pBuffer->pageCount == 0))
+        return NV_ERR_INVALID_STATE;
 
     *ppPhysAddrs = pBuffer->physAddrs;
     *pPageCount = pBuffer->pageCount;

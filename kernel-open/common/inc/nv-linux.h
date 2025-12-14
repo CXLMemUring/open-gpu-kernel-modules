@@ -426,10 +426,11 @@ typedef enum
 
 // allow an easy way to convert all debug printfs related to memory
 // management back and forth between 'info' and 'errors'
+// Default to suppressed (0x5) to avoid log spam; define NV_DBG_MEM to enable
 #if defined(NV_DBG_MEM)
 #define NV_DBG_MEMINFO NV_DBG_ERRORS
 #else
-#define NV_DBG_MEMINFO NV_DBG_INFO
+#define NV_DBG_MEMINFO 0x5
 #endif
 
 #define NV_MEM_TRACKING_PAD_SIZE(size) \

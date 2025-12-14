@@ -167,31 +167,15 @@ rmapiutilGetControlInfo
 {
     RS_RESOURCE_DESC *pResourceDesc = RsResInfoByExternalClassId(DRF_VAL(XXXX, _CTRL_CMD, _CLASS, cmd));
 
-    // Debug for CXL commands
-    if (cmd == 0x20801833 || cmd == 0x20801834)
-    {
-        NV_PRINTF(LEVEL_ERROR, "CXL GetControlInfo: cmd=0x%x, pResourceDesc=%p\n", cmd, pResourceDesc);
-    }
 
     if (pResourceDesc != NULL)
     {
         struct NVOC_CLASS_DEF *pClassDef = (void*)pResourceDesc->pClassInfo;
 
-        if (cmd == 0x20801833 || cmd == 0x20801834)
-        {
-            NV_PRINTF(LEVEL_ERROR, "CXL GetControlInfo: pClassDef=%p, pExportInfo=%p\n",
-                   pClassDef, pClassDef ? pClassDef->pExportInfo : NULL);
-        }
-
         if (pClassDef != NULL)
         {
             const struct NVOC_EXPORTED_METHOD_DEF *pMethodDef =
                 nvocGetExportedMethodDefFromMethodInfo_IMPL(pClassDef->pExportInfo, cmd);
-
-            if (cmd == 0x20801833 || cmd == 0x20801834)
-            {
-                NV_PRINTF(LEVEL_ERROR, "CXL GetControlInfo: pMethodDef=%p\n", pMethodDef);
-            }
 
             if (pMethodDef != NULL)
             {
@@ -204,19 +188,9 @@ rmapiutilGetControlInfo
                 if (pParamsSize != NULL)
                     *pParamsSize = pMethodDef->paramSize;
 
-                if (cmd == 0x20801833 || cmd == 0x20801834)
-                {
-                    NV_PRINTF(LEVEL_ERROR, "CXL GetControlInfo: FOUND! flags=0x%x\n", pMethodDef->flags);
-                }
-
                 return NV_OK;
             }
         }
-    }
-
-    if (cmd == 0x20801833 || cmd == 0x20801834)
-    {
-        NV_PRINTF(LEVEL_ERROR, "CXL GetControlInfo: NOT FOUND, returning OBJECT_NOT_FOUND\n");
     }
 
     return NV_ERR_OBJECT_NOT_FOUND;

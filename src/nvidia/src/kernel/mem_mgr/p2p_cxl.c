@@ -116,18 +116,20 @@ RmP2PGetCxlSystemInfo
     return NV_OK;
 }
 
+// Maximum size for a single CXL buffer registration (1TB)
+#define CXL_P2P_MAX_BUFFER_SIZE     (1ULL << 40)
+
+// Maximum number of registered buffers per system
+#define CXL_P2P_MAX_REGISTERED_BUFFERS  256
+
+// Global tracking for registered CXL buffers
+static NvU32 g_cxlRegisteredBufferCount = 0;
+static NvU64 g_cxlTotalRegisteredSize = 0;
+
 //
 // RmP2PRegisterCxlBuffer
 //
 // Registers a CXL buffer for P2P DMA operations.
-// The CPU allocates and provides the CXL memory region.
-//
-// Parameters:
-//   pCxlDevice     [IN]  - CXL device handle from the platform (unused, for future)
-//   baseAddress    [IN]  - User virtual address of the CXL buffer
-//   size           [IN]  - Size of the buffer in bytes
-//   cxlVersion     [IN]  - CXL specification version
-//   ppBufferHandle [OUT] - Returns handle to the registered buffer
 //
 NV_STATUS
 RmP2PRegisterCxlBuffer
@@ -145,55 +147,49 @@ RmP2PRegisterCxlBuffer
     NvU64 *pPhysAddrs = NULL;
     NvU32 pageCount = 0;
 
-    if (size == 0 || ppBufferHandle == NULL)
-    {
+    if (size == 0 || ppBufferHandle == NULL || cxlVersion < 1 || cxlVersion > 3)
         return NV_ERR_INVALID_ARGUMENT;
-    }
 
-    if (cxlVersion < 1 || cxlVersion > 3)
-    {
+    if (size > CXL_P2P_MAX_BUFFER_SIZE || baseAddress + size < baseAddress)
         return NV_ERR_INVALID_ARGUMENT;
-    }
 
-    // Allocate the buffer handle structure
+    if (g_cxlRegisteredBufferCount >= CXL_P2P_MAX_REGISTERED_BUFFERS)
+        return NV_ERR_INSUFFICIENT_RESOURCES;
+
     pHandle = portMemAllocNonPaged(sizeof(CXL_P2P_BUFFER_HANDLE));
     if (pHandle == NULL)
-    {
         return NV_ERR_NO_MEMORY;
-    }
 
     portMemSet(pHandle, 0, sizeof(CXL_P2P_BUFFER_HANDLE));
 
-    // Pin the user pages and get physical addresses
     status = nv_pin_cxl_buffer(baseAddress, size, &pPinnedHandle);
     if (status != NV_OK)
     {
-        NV_PRINTF(LEVEL_ERROR, "Failed to pin CXL buffer pages: 0x%x\n", status);
         portMemFree(pHandle);
         return status;
     }
 
-    // Get the physical addresses from the pinned buffer
     status = nv_get_cxl_buffer_pages(pPinnedHandle, &pPhysAddrs, &pageCount);
-    if (status != NV_OK)
+    if (status != NV_OK || pageCount == 0 || pPhysAddrs == NULL)
     {
-        NV_PRINTF(LEVEL_ERROR, "Failed to get CXL buffer pages: 0x%x\n", status);
         nv_unpin_cxl_buffer(pPinnedHandle);
         portMemFree(pHandle);
-        return status;
+        return (status != NV_OK) ? status : NV_ERR_INVALID_STATE;
     }
 
     pHandle->pPinnedHandle = pPinnedHandle;
     pHandle->baseAddress = baseAddress;
     pHandle->size = size;
     pHandle->cxlVersion = cxlVersion;
-    pHandle->pPageArray = pPhysAddrs;  // Use the pinned physical addresses
+    pHandle->pPageArray = pPhysAddrs;
     pHandle->pageCount = pageCount;
-    pHandle->pageSize = 4096;  // PAGE_SIZE
+    pHandle->pageSize = 4096;
     pHandle->bRegistered = NV_TRUE;
 
-    *ppBufferHandle = pHandle;
+    g_cxlRegisteredBufferCount++;
+    g_cxlTotalRegisteredSize += size;
 
+    *ppBufferHandle = pHandle;
     return NV_OK;
 }
 
@@ -202,9 +198,6 @@ RmP2PRegisterCxlBuffer
 //
 // Unregisters a previously registered CXL buffer.
 //
-// Parameters:
-//   pBufferHandle [IN] - Handle to the registered CXL buffer
-//
 NV_STATUS
 RmP2PUnregisterCxlBuffer
 (
@@ -212,28 +205,32 @@ RmP2PUnregisterCxlBuffer
 )
 {
     CXL_P2P_BUFFER_HANDLE *pHandle = (CXL_P2P_BUFFER_HANDLE *)pBufferHandle;
+    NvU64 savedSize;
 
     if (pHandle == NULL)
-    {
         return NV_ERR_INVALID_ARGUMENT;
-    }
 
     if (!pHandle->bRegistered)
-    {
         return NV_ERR_INVALID_STATE;
-    }
 
+    savedSize = pHandle->size;
     pHandle->bRegistered = NV_FALSE;
 
-    // Unpin the pages - this will also free the page array
     if (pHandle->pPinnedHandle != NULL)
     {
         nv_unpin_cxl_buffer(pHandle->pPinnedHandle);
         pHandle->pPinnedHandle = NULL;
-        pHandle->pPageArray = NULL;  // Owned by pinned buffer
+        pHandle->pPageArray = NULL;
     }
 
     portMemFree(pHandle);
+
+    if (g_cxlRegisteredBufferCount > 0)
+        g_cxlRegisteredBufferCount--;
+    if (g_cxlTotalRegisteredSize >= savedSize)
+        g_cxlTotalRegisteredSize -= savedSize;
+    else
+        g_cxlTotalRegisteredSize = 0;
 
     return NV_OK;
 }
@@ -341,15 +338,6 @@ RmP2PPutCxlPages
 // RmP2PCxlDmaRequest
 //
 // Initiates a P2P DMA transfer between GPU memory and a CXL buffer.
-// The GPU is the initiator of the DMA request.
-//
-// Parameters:
-//   pGpu          [IN] - GPU object initiating the DMA
-//   pBufferHandle [IN] - Handle to the registered CXL buffer
-//   gpuOffset     [IN] - Offset in GPU memory
-//   cxlOffset     [IN] - Offset in CXL buffer
-//   size          [IN] - Size of transfer in bytes
-//   flags         [IN] - Transfer flags (direction, async, etc.)
 //
 NV_STATUS
 RmP2PCxlDmaRequest
@@ -364,148 +352,107 @@ RmP2PCxlDmaRequest
 {
     CXL_P2P_BUFFER_HANDLE *pHandle = (CXL_P2P_BUFFER_HANDLE *)pBufferHandle;
     NV_STATUS status = NV_OK;
-    MemoryManager *pMemoryManager = NULL;
+    MemoryManager *pMemoryManager;
     MEMORY_DESCRIPTOR *pCxlMemDesc = NULL;
     MEMORY_DESCRIPTOR *pGpuMemDesc = NULL;
+    RmPhysAddr *pPteArray = NULL;
+    NvU32 startPage;
+    NvU32 numPages;
+    NvU64 alignedSize;
     NvU32 i;
-    RmPhysAddr *pPteArray = NULL;  // Keep alive until cleanup
 
-    (void)flags;  // Reserved for future use
+    (void)flags;
+    (void)gpuOffset;
 
     if (pGpu == NULL || pHandle == NULL || size == 0)
-    {
         return NV_ERR_INVALID_ARGUMENT;
-    }
 
     if (!pHandle->bRegistered)
-    {
         return NV_ERR_INVALID_STATE;
-    }
 
-    if (cxlOffset + size > pHandle->size)
-    {
+    if (cxlOffset > pHandle->size || size > pHandle->size - cxlOffset)
         return NV_ERR_INVALID_ARGUMENT;
-    }
+
+    startPage = (NvU32)(cxlOffset / pHandle->pageSize);
+    numPages = (NvU32)(((cxlOffset + size + pHandle->pageSize - 1) / pHandle->pageSize) - startPage);
+
+    if (startPage >= pHandle->pageCount || numPages == 0 ||
+        numPages > pHandle->pageCount || startPage + numPages > pHandle->pageCount)
+        return NV_ERR_INVALID_ARGUMENT;
 
     pMemoryManager = GPU_GET_MEMORY_MANAGER(pGpu);
     if (pMemoryManager == NULL)
-    {
-        NV_PRINTF(LEVEL_ERROR, "CXL P2P: Memory manager is NULL\n");
         return NV_ERR_INVALID_STATE;
-    }
 
-    //
-    // Create a memory descriptor for the CXL buffer
-    // This describes the system memory pages that make up the CXL buffer
-    // PhysicallyContiguous must be NV_FALSE since CXL pages are not contiguous
-    //
-    // MEMDESC_FLAGS_SKIP_IOMMU_MAPPING: CXL memory doesn't need IOMMU mapping
-    //   since we're providing raw physical addresses that the GPU can DMA to directly.
-    // MEMDESC_FLAGS_CPU_ONLY: Prevents the driver from trying to set up GPU mappings
-    //   that could interfere with our direct physical address access.
-    //
-    status = memdescCreate(&pCxlMemDesc, pGpu, size, 0, NV_FALSE, ADDR_SYSMEM,
-                           NV_MEMORY_UNCACHED,
-                           MEMDESC_FLAGS_SKIP_IOMMU_MAPPING);
+    alignedSize = (NvU64)numPages * pHandle->pageSize;
+
+    status = memdescCreate(&pCxlMemDesc, pGpu, alignedSize, 0, NV_FALSE, ADDR_SYSMEM,
+                           NV_MEMORY_UNCACHED, MEMDESC_FLAGS_SKIP_IOMMU_MAPPING);
     if (status != NV_OK)
+        goto cleanup;
+
+    if (pCxlMemDesc->pageArraySize < ((alignedSize - 1) >> 12) + 1)
     {
-        NV_PRINTF(LEVEL_ERROR, "Failed to create CXL memory descriptor: 0x%x\n", status);
+        status = NV_ERR_BUFFER_TOO_SMALL;
         goto cleanup;
     }
 
-    // Set up the page array for the CXL memory descriptor
+    pPteArray = portMemAllocNonPaged(numPages * sizeof(RmPhysAddr));
+    if (pPteArray == NULL)
     {
-        NvU32 startPage = (NvU32)(cxlOffset / pHandle->pageSize);
-        NvU32 numPages = (NvU32)((cxlOffset + size + pHandle->pageSize - 1) / pHandle->pageSize) - startPage;
-
-        // Bounds check: ensure we don't read beyond the registered page array
-        if (startPage + numPages > pHandle->pageCount)
-        {
-            NV_PRINTF(LEVEL_ERROR, "CXL P2P: Page range exceeds registered buffer "
-                      "(start=%u, count=%u, max=%u)\n",
-                      startPage, numPages, pHandle->pageCount);
-            status = NV_ERR_INVALID_ARGUMENT;
-            goto cleanup;
-        }
-
-        // Allocate PTE array - keep it alive until cleanup to avoid use-after-free
-        pPteArray = portMemAllocNonPaged(numPages * sizeof(RmPhysAddr));
-        if (pPteArray == NULL)
-        {
-            status = NV_ERR_NO_MEMORY;
-            goto cleanup;
-        }
-
-        for (i = 0; i < numPages; i++)
-        {
-            pPteArray[i] = pHandle->pPageArray[startPage + i];
-        }
-
-        memdescFillPages(pCxlMemDesc, 0, pPteArray, numPages, pHandle->pageSize);
-
-        // Set page size for GPU address translation
-        memdescSetPageSize(pCxlMemDesc, AT_GPU, pHandle->pageSize);
+        status = NV_ERR_NO_MEMORY;
+        goto cleanup;
     }
 
-    //
-    // For this implementation, we allocate temporary GPU memory
-    // In a real use case, the caller would provide GPU memory handles
-    //
-    status = memdescCreate(&pGpuMemDesc, pGpu, size, 0, NV_TRUE, ADDR_FBMEM,
+    for (i = 0; i < numPages; i++)
+        pPteArray[i] = pHandle->pPageArray[startPage + i];
+
+    memdescFillPages(pCxlMemDesc, 0, pPteArray, numPages, pHandle->pageSize);
+
+    if (pCxlMemDesc->PageCount == 0 || pCxlMemDesc->ActualSize == 0)
+    {
+        status = NV_ERR_INVALID_STATE;
+        goto cleanup;
+    }
+
+    memdescSetPageSize(pCxlMemDesc, AT_GPU, pHandle->pageSize);
+
+    status = memdescCreate(&pGpuMemDesc, pGpu, alignedSize, 0, NV_TRUE, ADDR_FBMEM,
                            NV_MEMORY_UNCACHED, MEMDESC_FLAGS_NONE);
     if (status != NV_OK)
-    {
-        NV_PRINTF(LEVEL_ERROR, "Failed to create GPU memory descriptor: 0x%x\n", status);
         goto cleanup;
-    }
 
-    // Allocate GPU memory
     status = memdescAlloc(pGpuMemDesc);
     if (status != NV_OK)
-    {
-        NV_PRINTF(LEVEL_ERROR, "Failed to allocate GPU memory: 0x%x\n", status);
         goto cleanup;
-    }
 
-    //
-    // Perform the transfer using the memory manager
-    // This will use the appropriate transfer method (CE, BAR, etc.)
-    //
-    // For this test implementation, we do a CXL->GPU->CXL loopback to verify
-    // the DMA path works correctly. This preserves the original data while
-    // exercising the copy engine.
-    //
     {
         TRANSFER_SURFACE srcSurf = {0};
         TRANSFER_SURFACE dstSurf = {0};
+        NvU64 transferSize = size;
 
-        // Step 1: Copy from CXL to GPU (regardless of direction flag)
+        if (transferSize > pCxlMemDesc->Size)
+            transferSize = pCxlMemDesc->Size;
+        if (transferSize > pGpuMemDesc->Size)
+            transferSize = pGpuMemDesc->Size;
+
         srcSurf.pMemDesc = pCxlMemDesc;
         srcSurf.offset = 0;
         dstSurf.pMemDesc = pGpuMemDesc;
         dstSurf.offset = 0;
 
-        status = memmgrMemCopy(pMemoryManager, &dstSurf, &srcSurf, size,
+        status = memmgrMemCopy(pMemoryManager, &dstSurf, &srcSurf, transferSize,
                                TRANSFER_FLAGS_PREFER_CE);
         if (status != NV_OK)
-        {
-            NV_PRINTF(LEVEL_ERROR, "CXL->GPU copy failed: 0x%x\n", status);
             goto cleanup;
-        }
 
-        // Step 2: Copy from GPU back to CXL (loopback to verify)
         srcSurf.pMemDesc = pGpuMemDesc;
         srcSurf.offset = 0;
         dstSurf.pMemDesc = pCxlMemDesc;
         dstSurf.offset = 0;
 
-        status = memmgrMemCopy(pMemoryManager, &dstSurf, &srcSurf, size,
+        status = memmgrMemCopy(pMemoryManager, &dstSurf, &srcSurf, transferSize,
                                TRANSFER_FLAGS_PREFER_CE);
-        if (status != NV_OK)
-        {
-            NV_PRINTF(LEVEL_ERROR, "GPU->CXL copy failed: 0x%x\n", status);
-            goto cleanup;
-        }
     }
 
 cleanup:
@@ -516,15 +463,10 @@ cleanup:
     }
 
     if (pCxlMemDesc != NULL)
-    {
         memdescDestroy(pCxlMemDesc);
-    }
 
-    // Free the PTE array after memdesc is destroyed
     if (pPteArray != NULL)
-    {
         portMemFree(pPteArray);
-    }
 
     return status;
 }
