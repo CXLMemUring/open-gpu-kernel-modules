@@ -1152,27 +1152,46 @@ NV_STATUS NV_API_CALL nv_pin_cxl_buffer(
     NvBool bLargeAlloc;
 
     if (unlikely(size == 0 || ppHandle == NULL))
+    {
+        nv_printf(NV_DBG_ERRORS, "NVRM: CXL pin: invalid argument (size=%llu, ppHandle=%p)\n",
+                  (unsigned long long)size, ppHandle);
         return NV_ERR_INVALID_ARGUMENT;
+    }
 
     // Check for overflow
     if (unlikely(userVirtAddr > ULONG_MAX - size))
+    {
+        nv_printf(NV_DBG_ERRORS, "NVRM: CXL pin: address overflow (addr=0x%llx, size=0x%llx)\n",
+                  (unsigned long long)userVirtAddr, (unsigned long long)size);
         return NV_ERR_INVALID_ARGUMENT;
+    }
 
     startAddr = userVirtAddr & PAGE_MASK;
     pageCount = ((userVirtAddr + size - 1) >> PAGE_SHIFT) - (startAddr >> PAGE_SHIFT) + 1;
 
     // Sanity check (max ~1TB)
     if (unlikely(pageCount == 0 || pageCount > (1UL << 28)))
+    {
+        nv_printf(NV_DBG_ERRORS, "NVRM: CXL pin: invalid page count %u (size=0x%llx)\n",
+                  pageCount, (unsigned long long)size);
         return NV_ERR_INVALID_ARGUMENT;
+    }
 
     // Check limits before allocating
     status = cxl_check_pin_limits(size, pageCount);
     if (unlikely(status != NV_OK))
+    {
+        nv_printf(NV_DBG_ERRORS, "NVRM: CXL pin: resource limit exceeded (size=0x%llx, pages=%u)\n",
+                  (unsigned long long)size, pageCount);
         return status;
+    }
 
     pBuffer = kzalloc(sizeof(*pBuffer), GFP_KERNEL);
     if (unlikely(pBuffer == NULL))
+    {
+        nv_printf(NV_DBG_ERRORS, "NVRM: CXL pin: failed to allocate buffer struct\n");
         return NV_ERR_NO_MEMORY;
+    }
 
     // Use vmalloc for large arrays (>512 entries)
     bLargeAlloc = (pageCount > 512);
@@ -1189,7 +1208,10 @@ NV_STATUS NV_API_CALL nv_pin_cxl_buffer(
     }
 
     if (unlikely(pBuffer->pages == NULL || pBuffer->physAddrs == NULL))
+    {
+        nv_printf(NV_DBG_ERRORS, "NVRM: CXL pin: failed to allocate page arrays (%u pages)\n", pageCount);
         goto fail_alloc;
+    }
 
     // Pin user pages
     nv_mmap_read_lock(current->mm);
@@ -1198,6 +1220,8 @@ NV_STATUS NV_API_CALL nv_pin_cxl_buffer(
 
     if (unlikely(ret != pageCount))
     {
+        nv_printf(NV_DBG_ERRORS, "NVRM: CXL pin: page pinning failed - got %d, expected %u (addr=0x%lx)\n",
+                  ret, pageCount, startAddr);
         if (ret > 0)
         {
             for (i = 0; i < ret; i++)
@@ -1206,9 +1230,25 @@ NV_STATUS NV_API_CALL nv_pin_cxl_buffer(
         goto fail_alloc;
     }
 
-    // Convert to physical addresses (optimized loop)
+    // Convert to physical addresses with validation
     for (i = 0; i < pageCount; i++)
+    {
+        if (unlikely(pBuffer->pages[i] == NULL))
+        {
+            nv_printf(NV_DBG_ERRORS, "NVRM: CXL pin: NULL page at index %u\n", i);
+            // Unpin pages we've processed so far
+            for (; i > 0; i--)
+                NV_UNPIN_USER_PAGE(pBuffer->pages[i - 1]);
+            goto fail_alloc;
+        }
         pBuffer->physAddrs[i] = page_to_phys(pBuffer->pages[i]);
+
+        // Sanity check physical address
+        if (unlikely(pBuffer->physAddrs[i] == 0))
+        {
+            nv_printf(NV_DBG_ERRORS, "NVRM: CXL pin: zero physical address at page %u\n", i);
+        }
+    }
 
     pBuffer->userVirtAddr = userVirtAddr;
     pBuffer->size = size;

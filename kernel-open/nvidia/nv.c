@@ -4177,10 +4177,8 @@ int NV_API_CALL nv_stop_rc_timer(
     if (!nv->rc_timer_enabled)
         return -1;
 
-    nv_printf(NV_DBG_INFO, "NVRM: stopping rc timer\n");
     nv->rc_timer_enabled = 0;
     nv_timer_delete_sync(&nvl->rc_timer.kernel_timer);
-    nv_printf(NV_DBG_INFO, "NVRM: rc timer stopped\n");
 
     return 0;
 }

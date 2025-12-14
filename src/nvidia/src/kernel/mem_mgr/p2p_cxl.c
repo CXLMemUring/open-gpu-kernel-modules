@@ -130,6 +130,7 @@ static NvU64 g_cxlTotalRegisteredSize = 0;
 // RmP2PRegisterCxlBuffer
 //
 // Registers a CXL buffer for P2P DMA operations.
+// Includes comprehensive validation to prevent silent crashes.
 //
 NV_STATUS
 RmP2PRegisterCxlBuffer
@@ -147,24 +148,50 @@ RmP2PRegisterCxlBuffer
     NvU64 *pPhysAddrs = NULL;
     NvU32 pageCount = 0;
 
-    if (size == 0 || ppBufferHandle == NULL || cxlVersion < 1 || cxlVersion > 3)
-        return NV_ERR_INVALID_ARGUMENT;
+    (void)pCxlDevice;  // Reserved for future use
 
-    if (size > CXL_P2P_MAX_BUFFER_SIZE || baseAddress + size < baseAddress)
+    if (size == 0 || ppBufferHandle == NULL || cxlVersion < 1 || cxlVersion > 3)
+    {
+        NV_PRINTF(LEVEL_ERROR, "CXL Register: invalid args (size=0x%llx, handle=%p, ver=%u)\n",
+                  size, ppBufferHandle, cxlVersion);
         return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    if (size > CXL_P2P_MAX_BUFFER_SIZE)
+    {
+        NV_PRINTF(LEVEL_ERROR, "CXL Register: buffer too large (0x%llx > 0x%llx)\n",
+                  size, CXL_P2P_MAX_BUFFER_SIZE);
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    if (baseAddress + size < baseAddress)
+    {
+        NV_PRINTF(LEVEL_ERROR, "CXL Register: address overflow (base=0x%llx, size=0x%llx)\n",
+                  baseAddress, size);
+        return NV_ERR_INVALID_ARGUMENT;
+    }
 
     if (g_cxlRegisteredBufferCount >= CXL_P2P_MAX_REGISTERED_BUFFERS)
+    {
+        NV_PRINTF(LEVEL_ERROR, "CXL Register: max buffers reached (%u)\n",
+                  CXL_P2P_MAX_REGISTERED_BUFFERS);
         return NV_ERR_INSUFFICIENT_RESOURCES;
+    }
 
     pHandle = portMemAllocNonPaged(sizeof(CXL_P2P_BUFFER_HANDLE));
     if (pHandle == NULL)
+    {
+        NV_PRINTF(LEVEL_ERROR, "CXL Register: handle allocation failed\n");
         return NV_ERR_NO_MEMORY;
+    }
 
     portMemSet(pHandle, 0, sizeof(CXL_P2P_BUFFER_HANDLE));
 
     status = nv_pin_cxl_buffer(baseAddress, size, &pPinnedHandle);
     if (status != NV_OK)
     {
+        NV_PRINTF(LEVEL_ERROR, "CXL Register: page pinning failed: 0x%x (addr=0x%llx, size=0x%llx)\n",
+                  status, baseAddress, size);
         portMemFree(pHandle);
         return status;
     }
@@ -172,6 +199,8 @@ RmP2PRegisterCxlBuffer
     status = nv_get_cxl_buffer_pages(pPinnedHandle, &pPhysAddrs, &pageCount);
     if (status != NV_OK || pageCount == 0 || pPhysAddrs == NULL)
     {
+        NV_PRINTF(LEVEL_ERROR, "CXL Register: get pages failed: 0x%x (pages=%u, array=%p)\n",
+                  status, pageCount, pPhysAddrs);
         nv_unpin_cxl_buffer(pPinnedHandle);
         portMemFree(pHandle);
         return (status != NV_OK) ? status : NV_ERR_INVALID_STATE;
@@ -338,6 +367,7 @@ RmP2PPutCxlPages
 // RmP2PCxlDmaRequest
 //
 // Initiates a P2P DMA transfer between GPU memory and a CXL buffer.
+// Includes comprehensive bounds checking to prevent silent crashes.
 //
 NV_STATUS
 RmP2PCxlDmaRequest
@@ -364,21 +394,97 @@ RmP2PCxlDmaRequest
     (void)flags;
     (void)gpuOffset;
 
-    if (pGpu == NULL || pHandle == NULL || size == 0)
+    // Critical parameter validation with error logging
+    if (pGpu == NULL)
+    {
+        NV_PRINTF(LEVEL_ERROR, "CXL P2P: FATAL - NULL GPU pointer\n");
         return NV_ERR_INVALID_ARGUMENT;
+    }
 
+    if (pHandle == NULL)
+    {
+        NV_PRINTF(LEVEL_ERROR, "CXL P2P: FATAL - NULL buffer handle\n");
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    if (size == 0)
+    {
+        NV_PRINTF(LEVEL_ERROR, "CXL P2P: FATAL - zero size transfer requested\n");
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    // Validate handle integrity
     if (!pHandle->bRegistered)
+    {
+        NV_PRINTF(LEVEL_ERROR, "CXL P2P: FATAL - buffer not registered\n");
         return NV_ERR_INVALID_STATE;
+    }
 
-    if (cxlOffset > pHandle->size || size > pHandle->size - cxlOffset)
+    if (pHandle->pPageArray == NULL)
+    {
+        NV_PRINTF(LEVEL_ERROR, "CXL P2P: FATAL - NULL page array in handle\n");
+        return NV_ERR_INVALID_STATE;
+    }
+
+    if (pHandle->pageCount == 0 || pHandle->pageSize == 0)
+    {
+        NV_PRINTF(LEVEL_ERROR, "CXL P2P: FATAL - invalid page count (%u) or size (%u)\n",
+                  pHandle->pageCount, pHandle->pageSize);
+        return NV_ERR_INVALID_STATE;
+    }
+
+    if (pHandle->size == 0)
+    {
+        NV_PRINTF(LEVEL_ERROR, "CXL P2P: FATAL - buffer size is zero\n");
+        return NV_ERR_INVALID_STATE;
+    }
+
+    // Bounds check: offset + size must not overflow and must be within buffer
+    if (cxlOffset > pHandle->size)
+    {
+        NV_PRINTF(LEVEL_ERROR, "CXL P2P: OOB - offset 0x%llx exceeds buffer size 0x%llx\n",
+                  cxlOffset, pHandle->size);
         return NV_ERR_INVALID_ARGUMENT;
+    }
 
+    if (size > pHandle->size - cxlOffset)
+    {
+        NV_PRINTF(LEVEL_ERROR, "CXL P2P: OOB - transfer size 0x%llx at offset 0x%llx exceeds buffer (size 0x%llx)\n",
+                  size, cxlOffset, pHandle->size);
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    // Calculate page range with overflow protection
     startPage = (NvU32)(cxlOffset / pHandle->pageSize);
     numPages = (NvU32)(((cxlOffset + size + pHandle->pageSize - 1) / pHandle->pageSize) - startPage);
 
-    if (startPage >= pHandle->pageCount || numPages == 0 ||
-        numPages > pHandle->pageCount || startPage + numPages > pHandle->pageCount)
+    // Comprehensive page bounds validation
+    if (startPage >= pHandle->pageCount)
+    {
+        NV_PRINTF(LEVEL_ERROR, "CXL P2P: OOB - startPage %u >= pageCount %u\n",
+                  startPage, pHandle->pageCount);
         return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    if (numPages == 0)
+    {
+        NV_PRINTF(LEVEL_ERROR, "CXL P2P: FATAL - calculated numPages is zero\n");
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    if (numPages > pHandle->pageCount)
+    {
+        NV_PRINTF(LEVEL_ERROR, "CXL P2P: OOB - numPages %u > total pageCount %u\n",
+                  numPages, pHandle->pageCount);
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    if (startPage + numPages > pHandle->pageCount)
+    {
+        NV_PRINTF(LEVEL_ERROR, "CXL P2P: OOB - page range [%u, %u) exceeds pageCount %u\n",
+                  startPage, startPage + numPages, pHandle->pageCount);
+        return NV_ERR_INVALID_ARGUMENT;
+    }
 
     pMemoryManager = GPU_GET_MEMORY_MANAGER(pGpu);
     if (pMemoryManager == NULL)
@@ -400,17 +506,43 @@ RmP2PCxlDmaRequest
     pPteArray = portMemAllocNonPaged(numPages * sizeof(RmPhysAddr));
     if (pPteArray == NULL)
     {
+        NV_PRINTF(LEVEL_ERROR, "CXL P2P: Failed to allocate PTE array for %u pages\n", numPages);
         status = NV_ERR_NO_MEMORY;
         goto cleanup;
     }
 
+    // Copy physical addresses with validation
     for (i = 0; i < numPages; i++)
-        pPteArray[i] = pHandle->pPageArray[startPage + i];
+    {
+        NvU64 physAddr = pHandle->pPageArray[startPage + i];
+
+        // Validate physical address is non-zero and looks valid
+        if (physAddr == 0)
+        {
+            NV_PRINTF(LEVEL_ERROR, "CXL P2P: FATAL - NULL physical address at page %u (array index %u)\n",
+                      startPage + i, i);
+            status = NV_ERR_INVALID_ADDRESS;
+            goto cleanup;
+        }
+
+        // Check for obviously invalid addresses (> 52-bit physical address space)
+        if (physAddr > 0xFFFFFFFFFFFFFULL)
+        {
+            NV_PRINTF(LEVEL_ERROR, "CXL P2P: FATAL - invalid physical address 0x%llx at page %u\n",
+                      physAddr, startPage + i);
+            status = NV_ERR_INVALID_ADDRESS;
+            goto cleanup;
+        }
+
+        pPteArray[i] = (RmPhysAddr)physAddr;
+    }
 
     memdescFillPages(pCxlMemDesc, 0, pPteArray, numPages, pHandle->pageSize);
 
     if (pCxlMemDesc->PageCount == 0 || pCxlMemDesc->ActualSize == 0)
     {
+        NV_PRINTF(LEVEL_ERROR, "CXL P2P: memdescFillPages failed - PageCount=%llu, ActualSize=0x%llx\n",
+                  pCxlMemDesc->PageCount, pCxlMemDesc->ActualSize);
         status = NV_ERR_INVALID_STATE;
         goto cleanup;
     }
@@ -420,11 +552,18 @@ RmP2PCxlDmaRequest
     status = memdescCreate(&pGpuMemDesc, pGpu, alignedSize, 0, NV_TRUE, ADDR_FBMEM,
                            NV_MEMORY_UNCACHED, MEMDESC_FLAGS_NONE);
     if (status != NV_OK)
+    {
+        NV_PRINTF(LEVEL_ERROR, "CXL P2P: GPU memdesc create failed: 0x%x\n", status);
         goto cleanup;
+    }
 
     status = memdescAlloc(pGpuMemDesc);
     if (status != NV_OK)
+    {
+        NV_PRINTF(LEVEL_ERROR, "CXL P2P: GPU memory allocation failed: 0x%x (size=0x%llx)\n",
+                  status, alignedSize);
         goto cleanup;
+    }
 
     {
         TRANSFER_SURFACE srcSurf = {0};
@@ -444,7 +583,11 @@ RmP2PCxlDmaRequest
         status = memmgrMemCopy(pMemoryManager, &dstSurf, &srcSurf, transferSize,
                                TRANSFER_FLAGS_PREFER_CE);
         if (status != NV_OK)
+        {
+            NV_PRINTF(LEVEL_ERROR, "CXL P2P: CXL->GPU copy failed: 0x%x (size=0x%llx)\n",
+                      status, transferSize);
             goto cleanup;
+        }
 
         srcSurf.pMemDesc = pGpuMemDesc;
         srcSurf.offset = 0;
@@ -453,6 +596,11 @@ RmP2PCxlDmaRequest
 
         status = memmgrMemCopy(pMemoryManager, &dstSurf, &srcSurf, transferSize,
                                TRANSFER_FLAGS_PREFER_CE);
+        if (status != NV_OK)
+        {
+            NV_PRINTF(LEVEL_ERROR, "CXL P2P: GPU->CXL copy failed: 0x%x (size=0x%llx)\n",
+                      status, transferSize);
+        }
     }
 
 cleanup:
