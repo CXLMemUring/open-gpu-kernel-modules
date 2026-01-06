@@ -1345,6 +1345,197 @@ NV_STATUS NV_API_CALL nv_get_cxl_buffer_pages(
 }
 
 /*
+ * CXL Buffer Huge Page Pinning (2MB pages)
+ *
+ * Pins user pages using huge pages (2MB) for CXL buffer DMA.
+ * Huge pages significantly reduce page table overhead for large transfers.
+ */
+#define CXL_HUGEPAGE_SIZE       (2ULL * 1024 * 1024)  // 2MB
+#define CXL_HUGEPAGE_SHIFT      21
+
+NV_STATUS NV_API_CALL nv_pin_cxl_buffer_hugepages(
+    NvU64   userVirtAddr,
+    NvU64   size,
+    NvU32   requestedPageSize,
+    void  **ppHandle
+)
+{
+    cxl_pinned_buffer_t *pBuffer = NULL;
+    unsigned long startAddr;
+    NvU32 pageCount;
+    NvU32 actualPageSize;
+    int ret;
+    NvU32 i;
+    NV_STATUS status;
+    NvBool bLargeAlloc;
+    NvBool bUseHugePages = NV_FALSE;
+
+    if (unlikely(size == 0 || ppHandle == NULL))
+    {
+        nv_printf(NV_DBG_ERRORS, "NVRM: CXL hugepage pin: invalid argument\n");
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    // Check if we can use huge pages (both address and size must be 2MB aligned)
+    if (requestedPageSize == CXL_HUGEPAGE_SIZE &&
+        (userVirtAddr & (CXL_HUGEPAGE_SIZE - 1)) == 0 &&
+        (size & (CXL_HUGEPAGE_SIZE - 1)) == 0 &&
+        size >= CXL_HUGEPAGE_SIZE)
+    {
+        bUseHugePages = NV_TRUE;
+        actualPageSize = CXL_HUGEPAGE_SIZE;
+        startAddr = userVirtAddr;
+        pageCount = (NvU32)(size >> CXL_HUGEPAGE_SHIFT);
+        nv_printf(NV_DBG_INFO, "NVRM: CXL hugepage pin: using 2MB pages (%u pages)\n", pageCount);
+    }
+    else
+    {
+        // Fall back to 4K pages
+        actualPageSize = PAGE_SIZE;
+        startAddr = userVirtAddr & PAGE_MASK;
+        pageCount = ((userVirtAddr + size - 1) >> PAGE_SHIFT) - (startAddr >> PAGE_SHIFT) + 1;
+        nv_printf(NV_DBG_INFO, "NVRM: CXL hugepage pin: falling back to 4K pages (%u pages)\n", pageCount);
+    }
+
+    // Check limits
+    status = cxl_check_pin_limits(size, pageCount);
+    if (status != NV_OK)
+    {
+        nv_printf(NV_DBG_ERRORS, "NVRM: CXL hugepage pin: resource limit exceeded\n");
+        return status;
+    }
+
+    // Allocate buffer structure
+    pBuffer = kzalloc(sizeof(cxl_pinned_buffer_t), GFP_KERNEL);
+    if (pBuffer == NULL)
+    {
+        nv_printf(NV_DBG_ERRORS, "NVRM: CXL hugepage pin: failed to allocate buffer struct\n");
+        return NV_ERR_NO_MEMORY;
+    }
+
+    pBuffer->userVirtAddr = userVirtAddr;
+    pBuffer->size = size;
+    pBuffer->pageCount = pageCount;
+    pBuffer->pageSize = actualPageSize;
+    pBuffer->bHugePages = bUseHugePages;
+    pBuffer->refCount = 1;
+
+    bLargeAlloc = (pageCount > 512);
+
+    // Allocate page tracking arrays
+    if (bLargeAlloc)
+    {
+        pBuffer->physAddrs = vmalloc(pageCount * sizeof(NvU64));
+        pBuffer->pages = vmalloc(pageCount * sizeof(struct page *));
+    }
+    else
+    {
+        pBuffer->physAddrs = kmalloc(pageCount * sizeof(NvU64), GFP_KERNEL);
+        pBuffer->pages = kmalloc(pageCount * sizeof(struct page *), GFP_KERNEL);
+    }
+
+    if (pBuffer->physAddrs == NULL || pBuffer->pages == NULL)
+    {
+        nv_printf(NV_DBG_ERRORS, "NVRM: CXL hugepage pin: failed to allocate arrays\n");
+        goto fail_alloc;
+    }
+
+    memset(pBuffer->pages, 0, pageCount * sizeof(struct page *));
+    memset(pBuffer->physAddrs, 0, pageCount * sizeof(NvU64));
+
+    // Pin pages using pin_user_pages
+    ret = NV_PIN_USER_PAGES(startAddr, pageCount, FOLL_LONGTERM | FOLL_WRITE,
+                           pBuffer->pages, NULL);
+    if (ret != pageCount)
+    {
+        nv_printf(NV_DBG_ERRORS, "NVRM: CXL hugepage pin: failed - got %d, expected %u\n",
+                  ret, pageCount);
+        // Unpin any pages that were pinned
+        if (ret > 0)
+        {
+            for (i = 0; i < (NvU32)ret; i++)
+            {
+                if (pBuffer->pages[i])
+                    NV_UNPIN_USER_PAGE(pBuffer->pages[i]);
+            }
+        }
+        goto fail_alloc;
+    }
+
+    // Convert page pointers to physical addresses
+    for (i = 0; i < pageCount; i++)
+    {
+        if (pBuffer->pages[i] == NULL)
+        {
+            nv_printf(NV_DBG_ERRORS, "NVRM: CXL hugepage pin: NULL page at index %u\n", i);
+            goto fail_unpin;
+        }
+        pBuffer->physAddrs[i] = page_to_phys(pBuffer->pages[i]);
+        if (pBuffer->physAddrs[i] == 0)
+        {
+            nv_printf(NV_DBG_ERRORS, "NVRM: CXL hugepage pin: zero phys addr at page %u\n", i);
+            goto fail_unpin;
+        }
+    }
+
+    cxl_track_pin(size, pageCount);
+    *ppHandle = pBuffer;
+
+    nv_printf(NV_DBG_INFO, "NVRM: CXL hugepage pin: success - %u %s pages, size=0x%llx\n",
+              pageCount, bUseHugePages ? "2MB" : "4K", (unsigned long long)size);
+
+    return NV_OK;
+
+fail_unpin:
+    for (i = 0; i < pageCount; i++)
+    {
+        if (pBuffer->pages[i])
+            NV_UNPIN_USER_PAGE(pBuffer->pages[i]);
+    }
+
+fail_alloc:
+    if (pBuffer->physAddrs)
+    {
+        if (bLargeAlloc)
+            vfree(pBuffer->physAddrs);
+        else
+            kfree(pBuffer->physAddrs);
+    }
+    if (pBuffer->pages)
+    {
+        if (bLargeAlloc)
+            vfree(pBuffer->pages);
+        else
+            kfree(pBuffer->pages);
+    }
+    kfree(pBuffer);
+    return NV_ERR_NO_MEMORY;
+}
+
+NV_STATUS NV_API_CALL nv_get_cxl_buffer_hugepages(
+    void    *pHandle,
+    NvU64  **ppPhysAddrs,
+    NvU32   *pPageCount,
+    NvU32   *pPageSize
+)
+{
+    cxl_pinned_buffer_t *pBuffer = (cxl_pinned_buffer_t *)pHandle;
+
+    if (unlikely(pBuffer == NULL || ppPhysAddrs == NULL ||
+                 pPageCount == NULL || pPageSize == NULL))
+        return NV_ERR_INVALID_ARGUMENT;
+
+    if (unlikely(pBuffer->physAddrs == NULL || pBuffer->pageCount == 0))
+        return NV_ERR_INVALID_STATE;
+
+    *ppPhysAddrs = pBuffer->physAddrs;
+    *pPageCount = pBuffer->pageCount;
+    *pPageSize = pBuffer->pageSize;
+
+    return NV_OK;
+}
+
+/*
  * CXL Device Enumeration
  *
  * Enumerates CXL devices in the system using the Linux PCI subsystem.
